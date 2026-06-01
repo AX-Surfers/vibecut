@@ -348,6 +348,28 @@ def _merge_short_tails(parts: list[dict], max_chars: int = 18,
     return merged
 
 
+# ── 사진/영상 구분 ──────────────────────────────────────────────────────────────
+# 실측 (CapCut 0602 프로젝트, JPEG 직접 임포트):
+#   - type: "photo"          ← "video" 가 아님
+#   - duration: 10_800_000_000  ← 3시간 고정값 (표시 시간과 무관)
+#   - extra_material_refs: 6개 ← loudness 재료 없음 (영상은 7개)
+#   - source_timerange.duration: 실제 표시 시간 (target_timerange 와 동일)
+#
+# 영상과 사진의 차이 요약:
+#   필드                  영상(video)         사진(photo)
+#   type                  "video"             "photo"
+#   duration              실제 길이(µs)        10_800_000_000
+#   extra_material_refs   7개(loudness 포함)   6개(loudness 없음)
+#   source_timerange      클립 구간            표시 시간(=target)
+PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".webp", ".tiff", ".bmp"}
+PHOTO_DURATION_US = 10_800_000_000  # CapCut 내부 고정값: 3시간
+
+
+def is_photo(path: Path) -> bool:
+    """파일 확장자로 사진 여부 판단"""
+    return path.suffix.lower() in PHOTO_EXTENSIONS
+
+
 def get_video_duration_us(video_path: Path) -> int:
     result = subprocess.run(
         ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
@@ -661,38 +683,74 @@ def create_project(video_path: Path, segments: list[dict], project_name: str) ->
     draft["duration"] = video_dur_us
     draft["path"]     = ""
 
-    # 비디오 트랙 (단일 세그먼트, before.mov 전체)
+    # 미디어 트랙 (단일 세그먼트)
+    # 사진과 영상의 material 포맷이 다름 — 실측 기반 분기 처리
+    input_is_photo = is_photo(video_path)
     vid_id, spd_id, plc_id = new_id(), new_id(), new_id()
     cvs_id, snd_id, col_id, vcl_id = new_id(), new_id(), new_id(), new_id()
 
     orig_vid = draft["materials"]["videos"][0]
     new_vid = copy.deepcopy(orig_vid)
-    new_vid.update({
-        "id": vid_id,
-        "path": str(video_path.resolve()),
-        "media_path": "",
-        "material_name": video_path.name,
-        "local_material_id": new_id(),
-        "duration": video_dur_us,
-    })
+    if input_is_photo:
+        # 사진 전용 포맷 (CapCut 실측):
+        #   type="photo", duration=10_800_000_000(3h 고정), has_audio=False
+        new_vid.update({
+            "id": vid_id,
+            "type": "photo",
+            "path": str(video_path.resolve()),
+            "media_path": "",
+            "material_name": video_path.name,
+            "local_material_id": new_id(),
+            "duration": PHOTO_DURATION_US,
+            "has_audio": False,
+        })
+    else:
+        # 영상 포맷 (기존 동작 유지)
+        new_vid.update({
+            "id": vid_id,
+            "path": str(video_path.resolve()),
+            "media_path": "",
+            "material_name": video_path.name,
+            "local_material_id": new_id(),
+            "duration": video_dur_us,
+        })
 
     orig_vseg = draft["tracks"][0]["segments"][0]
     new_vseg = copy.deepcopy(orig_vseg)
-    new_vseg.update({
-        "id": new_id(),
-        "material_id": vid_id,
-        "extra_material_refs": [spd_id, plc_id, cvs_id, snd_id, col_id, vcl_id],
-        "source_timerange": {"start": 0, "duration": video_dur_us},
-        "target_timerange": {"start": 0, "duration": video_dur_us},
-        "speed": 1.0, "volume": 1.0,
-        "clip": {
-            "alpha": 1.0,
-            "flip": {"horizontal": False, "vertical": False},
-            "rotation": 0.0,
-            "scale": {"x": 1.0, "y": 1.0},
-            "transform": {"x": 0.0, "y": 0.0}
-        },
-    })
+    if input_is_photo:
+        # 사진 세그먼트: extra_refs 6개 (loudness 없음), source_timerange=표시시간
+        new_vseg.update({
+            "id": new_id(),
+            "material_id": vid_id,
+            "extra_material_refs": [spd_id, plc_id, cvs_id, snd_id, col_id, vcl_id],
+            "source_timerange": {"start": 0, "duration": video_dur_us},
+            "target_timerange": {"start": 0, "duration": video_dur_us},
+            "speed": 1.0, "volume": 1.0,
+            "clip": {
+                "alpha": 1.0,
+                "flip": {"horizontal": False, "vertical": False},
+                "rotation": 0.0,
+                "scale": {"x": 1.0, "y": 1.0},
+                "transform": {"x": 0.0, "y": 0.0}
+            },
+        })
+    else:
+        # 영상 세그먼트: extra_refs 6개 (기존 동작 유지)
+        new_vseg.update({
+            "id": new_id(),
+            "material_id": vid_id,
+            "extra_material_refs": [spd_id, plc_id, cvs_id, snd_id, col_id, vcl_id],
+            "source_timerange": {"start": 0, "duration": video_dur_us},
+            "target_timerange": {"start": 0, "duration": video_dur_us},
+            "speed": 1.0, "volume": 1.0,
+            "clip": {
+                "alpha": 1.0,
+                "flip": {"horizontal": False, "vertical": False},
+                "rotation": 0.0,
+                "scale": {"x": 1.0, "y": 1.0},
+                "transform": {"x": 0.0, "y": 0.0}
+            },
+        })
 
     video_track = copy.deepcopy(draft["tracks"][0])
     video_track["id"] = new_id()

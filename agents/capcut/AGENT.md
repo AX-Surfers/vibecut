@@ -130,8 +130,21 @@ tracks[0].segments[N]
 
 ### 각 material 템플릿
 
+> ⚠️ **사진과 영상의 포맷이 다름** — 잘못된 포맷은 화면이 검정으로 렌더링됨 (실측 확인)
+>
+> | 필드 | 영상 (`video`) | 사진 (`photo`) |
+> |------|---------------|---------------|
+> | `type` | `"video"` | `"photo"` |
+> | `duration` | 실제 길이 (µs) | `10_800_000_000` (3h 고정값) |
+> | `has_audio` | True/False | `False` |
+> | `extra_material_refs` | 7개 (loudness 포함) | **6개 (loudness 없음)** |
+> | `source_timerange.duration` | 클립 구간 | 표시 시간 (=target) |
+
 ```python
+PHOTO_DURATION_US = 10_800_000_000   # CapCut 사진 고정값 (3시간) — 표시 시간과 무관
+
 def make_video_material(uid, video_path, video_duration_us, local_material_id):
+    """영상 전용. 사진이면 make_photo_material() 사용."""
     return {
         "id": uid, "type": "video",
         "duration": video_duration_us,          # 원본 전체 길이 (변경 금지)
@@ -141,7 +154,7 @@ def make_video_material(uid, video_path, video_duration_us, local_material_id):
         "width": 1920, "height": 1080,
         "category_name": "local",
         "material_name": os.path.basename(video_path),
-        "local_material_id": local_material_id, # 원본 그대로 유지
+        "local_material_id": local_material_id,
         "crop": {"upper_left_x":0.0,"upper_left_y":0.0,"upper_right_x":1.0,
                  "upper_right_y":0.0,"lower_left_x":0.0,"lower_left_y":1.0,
                  "lower_right_x":1.0,"lower_right_y":1.0},
@@ -149,6 +162,36 @@ def make_video_material(uid, video_path, video_duration_us, local_material_id):
         "source_platform": 0, "check_flag": 62978047,
         # ... (나머지 빈 필드들)
     }
+
+def make_photo_material(uid, photo_path, img_width, img_height):
+    """사진(JPEG/PNG 등) 전용.
+    - type: "photo" (영상과 다름)
+    - duration: PHOTO_DURATION_US = 10_800_000_000 (3h 고정, 실제 표시 시간과 무관)
+    - has_audio: False
+    - extra_material_refs: 6개 (loudness 없음 — 영상은 7개)
+    """
+    return {
+        "id": uid, "type": "photo",             # "video" 아님
+        "duration": PHOTO_DURATION_US,          # 3시간 고정값 (표시 시간과 무관)
+        "path": photo_path,
+        "media_path": "", "local_id": "",
+        "has_audio": False,                     # 사진은 항상 False
+        "width": img_width, "height": img_height,  # 실제 이미지 크기
+        "material_name": os.path.basename(photo_path),
+        "picture_from": "none",
+        "crop": {"upper_left_x":0.0,"upper_left_y":0.0,"upper_right_x":1.0,
+                 "upper_right_y":0.0,"lower_left_x":0.0,"lower_left_y":1.0,
+                 "lower_right_x":1.0,"lower_right_y":1.0},
+        "crop_ratio": "free", "crop_scale": 1.0,
+        "source_platform": 0, "check_flag": 62978047,
+        # ... (나머지 빈 필드들)
+    }
+
+# 사진 세그먼트 extra_material_refs: 6개 (loudness 없음)
+# photo_extra = [speed_id, placeholder_id, canvas_id, sound_channel_id, material_color_id, vocal_sep_id]
+#
+# 영상 세그먼트 extra_material_refs: 7개 (loudness 포함)
+# video_extra = [speed_id, placeholder_id, canvas_id, sound_channel_id, material_color_id, loudness_id, vocal_sep_id]
 
 def make_speed(uid):
     return {"id": uid, "type": "speed", "mode": 0, "speed": 1.0, "curve_speed": None}
