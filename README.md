@@ -9,6 +9,7 @@
 |------|-----------------------|------|
 | **자막 자동 생성** | `/vibecut-add-subtitles` 또는 "자막 올려줘" | Whisper 전사 → 한국어 검수 → CapCut 자막 트랙 추가 |
 | **무음 컷편집** | `/vibecut-auto-edit` 또는 "무음 제거해줘" | -35dB 이하 자동 감지 → CapCut JSON 적용 |
+| **사진 슬라이드쇼** | `photo_slideshow.py` | 사진 폴더 + 배경음악 → CapCut 슬라이드쇼 프로젝트 |
 | **자막 검증만** | `@subtitle-verifier <name>.srt 검증해줘` | 한국어 오인식 교정 + `corrections.json` 학습 |
 | **CapCut JSON 직접 수정** | `@capcut ...` 자연어 | 4개 파일 동시 갱신, .locked 자동 삭제, 30fps 정렬 |
 
@@ -113,9 +114,10 @@ Vibecut/
 │   ├── vibecut-add-subtitles/SKILL.md  ← 자막 자동 생성·검증·적용
 │   └── vibecut-auto-edit/SKILL.md      ← 무음 제거 컷편집
 ├── scripts/                     ← uv-ready Python 스크립트
-│   ├── add_subtitles.py
-│   ├── capcut_editor.py
-│   └── make_segments.py
+│   ├── add_subtitles.py         ← 영상/사진 → Whisper 자막 → CapCut 프로젝트
+│   ├── photo_slideshow.py       ← 사진 폴더 → CapCut 슬라이드쇼 (배경음악/자막 지원)
+│   ├── capcut_editor.py         ← CapCut JSON 컷편집 (무음 제거용)
+│   └── make_segments.py         ← 발화 구간 생성
 ├── data/
 │   └── corrections.json         ← 한국어 오인식 사전 (사용할수록 누적)
 ├── AGENTS.md                    ← Codex CLI / 범용 가이드
@@ -129,7 +131,22 @@ Vibecut/
 
 ## 주요 개념
 
-### 1. CapCut JSON 4개 파일 동시 저장 (필수)
+### 1. 사진과 영상의 material 포맷 차이 (중요)
+
+CapCut에서 사진과 영상은 **JSON 포맷이 다릅니다**. 잘못된 포맷을 사용하면 화면이 검정으로 렌더링됩니다.
+
+| 필드 | 영상 (`video`) | 사진 (`photo`) |
+|------|---------------|---------------|
+| `type` | `"video"` | `"photo"` |
+| `duration` | 실제 길이 (µs) | `10_800_000_000` (3시간 고정) |
+| `has_audio` | True/False | `False` |
+| `extra_material_refs` | 7개 (loudness 포함) | **6개 (loudness 없음)** |
+| `source_timerange` | 클립 구간 | 표시 시간 (= target_timerange) |
+
+> `duration: 10_800_000_000` 은 CapCut 내부에서 사진을 "무한 소재"로 처리하는 고정값입니다.  
+> 실제 표시 시간은 segment의 `target_timerange.duration` 으로 제어합니다.
+
+### 2. CapCut JSON 4개 파일 동시 저장 (필수)
 
 CapCut은 4개 파일을 동시에 검사합니다. 하나라도 빠지면 변경사항 무시:
 ```
