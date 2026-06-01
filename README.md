@@ -5,11 +5,12 @@
 
 ## 무엇을 할 수 있나요?
 
-| 기능 | 명령 한 줄 (Claude Code) | 결과 |
+| 기능 | 스킬 / 명령 한 줄 | 결과 |
 |------|-----------------------|------|
-| 자막 자동 생성 | `@capcut <video.mov>에 자막 올려줘` | Whisper 전사 → 한국어 검수 → CapCut 자막 트랙 추가 |
-| 무음 컷편집 | `@capcut <video.mov> 무음 제거해줘` | -35dB 이하 자동 감지 → CapCut JSON 적용 |
-| 자막 검증만 | `@subtitle-verifier <name>.srt 검증해줘` | 한국어 오인식 교정 + `corrections.json` 학습 |
+| **자막 자동 생성** | `/vibecut-add-subtitles` 또는 "자막 올려줘" | Whisper 전사 → 한국어 검수 → CapCut 자막 트랙 추가 |
+| **무음 컷편집** | `/vibecut-auto-edit` 또는 "무음 제거해줘" | -35dB 이하 자동 감지 → CapCut JSON 적용 |
+| **자막 검증만** | `@subtitle-verifier <name>.srt 검증해줘` | 한국어 오인식 교정 + `corrections.json` 학습 |
+| **CapCut JSON 직접 수정** | `@capcut ...` 자연어 | 4개 파일 동시 갱신, .locked 자동 삭제, 30fps 정렬 |
 
 ### 핵심 특징
 
@@ -108,8 +109,9 @@ Vibecut/
 ├── agents/                      ← Claude Code 서브에이전트
 │   ├── capcut/AGENT.md
 │   └── subtitle-verifier/AGENT.md
-├── skills/                      ← Claude Code 스킬
-│   └── vibecut-auto-edit/SKILL.md
+├── skills/                      ← Claude Code 스킬 (목적별 분리)
+│   ├── vibecut-add-subtitles/SKILL.md  ← 자막 자동 생성·검증·적용
+│   └── vibecut-auto-edit/SKILL.md      ← 무음 제거 컷편집
 ├── scripts/                     ← uv-ready Python 스크립트
 │   ├── add_subtitles.py
 │   ├── capcut_editor.py

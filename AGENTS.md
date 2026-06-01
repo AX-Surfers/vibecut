@@ -110,7 +110,11 @@ Vibecut/
 
 ## 자세한 가이드
 
-- **Claude Code 사용자**: `agents/capcut/AGENT.md` 및 `skills/vibecut-auto-edit/SKILL.md` 참조
+- **Claude Code 사용자**:
+  - `agents/capcut/AGENT.md` — CapCut JSON 직접 수정 자동화
+  - `agents/subtitle-verifier/AGENT.md` — 한국어 자막 오타 검증
+  - `skills/vibecut-add-subtitles/SKILL.md` — 자막 자동 생성·검증·적용
+  - `skills/vibecut-auto-edit/SKILL.md` — 무음 제거 컷편집
 - **Codex CLI 사용자**: 이 AGENTS.md + `README.md` 참조
 - **스크립트 직접 사용**: `scripts/*.py` 각 파일 상단의 docstring 참조
 
