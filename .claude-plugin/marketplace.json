@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-marketplace-schema.json",
+  "name": "vibecut",
+  "description": "Vibecut 마켓플레이스 — CapCut 자동화 플러그인 모음 (by AX-Surfers)",
+  "owner": {
+    "name": "AX-Surfers",
+    "url": "https://github.com/AX-Surfers"
+  },
+  "plugins": [
+    {
+      "name": "vibecut",
+      "displayName": "Vibecut — CapCut Auto Edit Suite",
+      "source": {
+        "source": "github",
+        "repo": "AX-Surfers/Vibecut",
+        "ref": "main"
+      },
+      "description": "CapCut JSON 직접 수정·Whisper 자막·한국어 오인식 자동 교정. Claude Code와 Codex CLI 양쪽 지원.",
+      "license": "MIT",
+      "homepage": "https://github.com/AX-Surfers/Vibecut",
+      "repository": "https://github.com/AX-Surfers/Vibecut",
+      "keywords": [
+        "capcut",
+        "video-editing",
+        "korean",
+        "subtitles",
+        "whisper",
+        "automation"
+      ]
+    }
+  ]
+}

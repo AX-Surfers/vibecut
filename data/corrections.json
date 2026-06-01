@@ -1,0 +1,32 @@
+{
+  "_meta": {
+    "description": "Whisper 한국어 오인식 → 교정 사전. subtitle-verifier가 자동 업데이트함.",
+    "version": 1,
+    "last_updated": "2026-05-31"
+  },
+  "dictionary": {
+    "챕포": "챗봇",
+    "챗팟": "챗봇",
+    "챗봇이": "챗봇",
+    "챕GPT": "ChatGPT",
+    "쳇GPT": "ChatGPT",
+    "재미나": "Gemini",
+    "코덱스리그젝": "codex --exec",
+    "코덱스 리그젝": "codex --exec",
+    "코덱스힐프": "codex --help",
+    "리그젝": "리젝트",
+    "리그젝트": "리젝트",
+    "이미지젠": "image-gen",
+    "헤르메스": "Hermes",
+    "오픈클로": "OpenClaw",
+    "CLP": "CLI",
+    "브론프트": "프롬프트",
+    "깃헙": "GitHub",
+    "깃허브의": "GitHub",
+    "노숀": "Notion",
+    "엠시피": "MCP",
+    "에이아이": "AI",
+    "에이피아이": "API",
+    "비주얼 스튜디오 코드": "VS Code"
+  }
+}

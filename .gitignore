@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# uv
+.uv-cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Whisper / 사용자 데이터
+*.srt
+*_verified.srt
+*_words.json
+
+# 예외: 예시 데이터는 포함
+!examples/*.srt
+
+# 임시 출력
+/tmp/
+output/
+*.mp4
+*.mov
+!examples/*.mp4
+
+# 환경 변수
+.env
+.env.local
+
+# 로그
+*.log

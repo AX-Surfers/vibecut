@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "vibecut",
+  "displayName": "Vibecut — CapCut Auto Edit Suite",
+  "version": "0.1.0",
+  "description": "CapCut 프로젝트 JSON을 직접 수정해 컷편집·자막을 자동화. Whisper 한국어 자막 + 오인식 자동 교정 + 음성 동기화된 자막 분리.",
+  "author": {
+    "name": "AX-Surfers"
+  },
+  "homepage": "https://github.com/AX-Surfers/Vibecut",
+  "repository": "https://github.com/AX-Surfers/Vibecut",
+  "license": "MIT",
+  "keywords": [
+    "capcut",
+    "video-editing",
+    "whisper",
+    "korean",
+    "subtitles",
+    "automation",
+    "vibecut"
+  ],
+  "skills": "./skills/",
+  "agents": "./agents/"
+}
