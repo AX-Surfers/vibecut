@@ -23,16 +23,15 @@ segments.json 형식: [[start_sec, end_sec], ...] (원본 영상 기준)
     --project ~/Movies/CapCut/User\\ Data/Projects/com.lveditor.draft/0526
 """
 
+import argparse
+import copy
 import json
 import os
-import uuid
-import copy
 import shutil
-import argparse
 import subprocess
 import sys
+import uuid
 from pathlib import Path
-
 
 # ────────────────────────────────────────────────
 # 상수

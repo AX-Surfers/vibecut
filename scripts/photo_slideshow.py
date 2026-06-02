@@ -582,7 +582,7 @@ def main():
 
     project_name = args.project_name or folder.name
 
-    print(f"\n[1/3] CapCut 종료")
+    print("\n[1/3] CapCut 종료")
     quit_capcut()
 
     print(f"\n[2/3] 프로젝트 생성: {project_name}")
@@ -590,7 +590,7 @@ def main():
         media_files, pairs, audio_path, srt_segments, project_name
     )
 
-    print(f"\n[3/3] 등록")
+    print("\n[3/3] 등록")
     register_project(project_dir, project_id, project_name, duration_us,
                      media_files[0] if media_files else folder)
 

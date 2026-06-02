@@ -130,7 +130,7 @@ def merge_verified_text_with_words(verified_segments: list[dict],
         all_words.extend(ws.get("words", []))
 
     if not all_words:
-        print(f"  ⚠ 단어 타임스탬프 없음 — 균등 분할로 폴백")
+        print("  ⚠ 단어 타임스탬프 없음 — 균등 분할로 폴백")
         return [{**vs, "words": []} for vs in verified_segments]
 
     # 큐 인덱스
@@ -781,7 +781,7 @@ def create_project(video_path: Path, segments: list[dict], project_name: str) ->
         dur_us = part_end_us - part_start_us
         if dur_us <= 0:
             continue
-        if True:  # noqa: 인접 코드 들여쓰기 호환용 (12 spaces 유지)
+        if True:  # noqa: SIM103 — 인접 코드 들여쓰기 호환용 (12 spaces 유지)
 
             mat_id = new_id()
 
@@ -850,7 +850,7 @@ def create_project(video_path: Path, segments: list[dict], project_name: str) ->
         new_tl_dir  / "draft_info.json.bak",
     ]:
         p.write_text(draft_str, encoding="utf-8")
-    print(f"  draft_info.json 4개 파일 저장")
+    print("  draft_info.json 4개 파일 저장")
 
     # ── 2-6. 불필요한 파일 제거 ────────────────────────────────────────
     # 0531(CapCut 직접 생성)과 비교 시 없어야 하는 파일들
@@ -980,7 +980,7 @@ def register_project(project_dir: Path, project_id: str, project_name: str,
     (project_dir / "draft_meta_info.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    print(f"  draft_meta_info.json 생성")
+    print("  draft_meta_info.json 생성")
 
 
 # ──────────────────────────────────────────
@@ -1010,7 +1010,7 @@ def main():
         print("      TEMPLATE_NAME 상수를 실제 존재하는 프로젝트명으로 변경하세요.")
         sys.exit(1)
 
-    print(f"\n[1/3] 음성 인식")
+    print("\n[1/3] 음성 인식")
     srt_cache = video_path.with_suffix(".srt")
     verified_srt = video_path.with_name(video_path.stem + "_verified.srt")
     words_cache = video_path.with_name(video_path.stem + "_words.json")  # 단어 타임스탬프 캐시
@@ -1027,7 +1027,7 @@ def main():
         print(f"  검증된 SRT 발견: {verified_srt.name}")
         segments = load_srt(verified_srt)
     elif srt_cache.exists() and word_segments:
-        print(f"  캐시된 SRT + 단어 타임스탬프 발견 — Whisper 생략")
+        print("  캐시된 SRT + 단어 타임스탬프 발견 — Whisper 생략")
         segments = load_srt(srt_cache)
     else:
         segments = transcribe(video_path, model_name=args.model, beam_size=args.beam_size)
@@ -1043,29 +1043,29 @@ def main():
 
     # 검증된 SRT를 사용한 경우, 원본 단어 타임스탬프와 병합
     if word_segments and (args.srt or verified_srt.exists()):
-        print(f"  검증된 자막과 단어 타임스탬프 병합 중...")
+        print("  검증된 자막과 단어 타임스탬프 병합 중...")
         segments = merge_verified_text_with_words(segments, word_segments)
         merged_words = sum(len(s.get("words", [])) for s in segments)
         print(f"  → {merged_words}개 단어 매칭 완료")
 
     # 검증 안내 (verified.srt가 없고 --no-verify가 아닌 경우)
     if not args.srt and not verified_srt.exists() and not args.no_verify:
-        print(f"\n  ⚠ 자막 검증 권장")
-        print(f"    Claude Code에서 다음과 같이 요청하세요:")
+        print("\n  ⚠ 자막 검증 권장")
+        print("    Claude Code에서 다음과 같이 요청하세요:")
         print(f"      \"@subtitle-verifier {srt_cache.name} 검증해줘\"")
-        print(f"    검증 후 다시 실행:")
+        print("    검증 후 다시 실행:")
         print(f"      python3 scripts/add_subtitles.py {video_path.name} --srt {verified_srt.name}")
-        print(f"  → 검증 없이 진행합니다 (--no-verify 또는 검증된 SRT가 있으면 이 메시지 생략)")
+        print("  → 검증 없이 진행합니다 (--no-verify 또는 검증된 SRT가 있으면 이 메시지 생략)")
 
     print(f"\n[2/3] CapCut 프로젝트 생성: {project_name}")
     quit_capcut()
     project_dir, project_id, duration_us = create_project(video_path, segments, project_name)
 
-    print(f"\n[3/3] 프로젝트 등록")
+    print("\n[3/3] 프로젝트 등록")
     register_project(project_dir, project_id, project_name, duration_us, video_path)
 
     subtitle_count = sum(1 for s in segments if s.get("text", "").strip())
-    print(f"\n✓ 완료")
+    print("\n✓ 완료")
     print(f"  프로젝트: {project_dir}")
     print(f"  자막 수:  {subtitle_count}개")
     print(f"  → CapCut을 열어 '{project_name}' 프로젝트를 확인하세요.")

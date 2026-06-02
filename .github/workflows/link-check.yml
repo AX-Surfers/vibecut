@@ -1,0 +1,22 @@
+name: Link check
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "**.md"
+  schedule:
+    # 매주 월요일 09:00 UTC (한국 18:00) — 외부 링크 깨짐 정기 점검
+    - cron: "0 9 * * 1"
+
+jobs:
+  markdown-links:
+    name: Markdown links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --no-progress --max-concurrency 4 --exclude-mail './**/*.md'
+          fail: true

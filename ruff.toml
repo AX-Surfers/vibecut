@@ -1,0 +1,37 @@
+# Vibecut ruff 설정
+# uv-ready 스크립트 (PEP 723 inline metadata) 와 일반 스크립트를 모두 처리
+
+target-version = "py311"
+line-length = 120
+
+[lint]
+# 기본 + 자주 잡히는 버그 패턴
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "B",    # flake8-bugbear (실수 잡기)
+    "UP",   # pyupgrade
+]
+
+# 의도적으로 무시
+ignore = [
+    "E501",  # 줄 길이 (line-length 옵션이 처리)
+    "E402",  # module level import not at top (PEP 723 헤더 때문)
+    "E701",  # multiple statements on one line: colon (헬퍼 1-liner 허용)
+    "E702",  # multiple statements on one line: semicolon (스크립트 스타일)
+    "E741",  # ambiguous variable name (l, I 등) — 컴프리헨션 1회용 변수
+    "B008",  # function call in default argument
+    "B904",  # raise ... from err (스크립트에서는 과함)
+    "B905",  # zip() without strict= (Py3.10+ 호환 위해)
+    "UP015", # redundant open mode
+]
+
+[lint.per-file-ignores]
+# 스크립트 파일은 unused-import 등에 더 관대
+"scripts/*.py" = ["F401", "F841"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
