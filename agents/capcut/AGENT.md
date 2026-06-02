@@ -590,6 +590,94 @@ def apply_subtitle_outline(text_material, border_width=0.15):
 
 ---
 
+### 페이드 인 / 페이드 아웃 애니메이션 적용
+
+세그먼트에 페이드 인/아웃 효과를 주려면 **`material_animations`** 에 `sticker_animation` 타입을 추가하고, 세그먼트의 `extra_material_refs` 에 그 ID를 등록한다.
+
+#### CapCut 기본 페이드 리소스 ID (실측)
+
+| 효과 | resource_id | category |
+|------|-------------|----------|
+| 페이드 인 | `6798320778182922760` | Trending1 (`2037708298`) |
+| 페이드 아웃 | `6798320902548230669` | Trending-2 (`2037708370`) |
+
+> ⚠️ 두 효과는 **resource_id가 다름**. 같은 ID로 type만 `"in"/"out"` 바꿔 적용하면 CapCut이 둘 다 페이드 아웃으로 렌더링한다 (실측 확인).
+
+#### 코드 예시
+
+```python
+FADE_IN_ID    = "6798320778182922760"
+FADE_OUT_ID   = "6798320902548230669"
+FADE_IN_PATH  = "~/Library/Containers/com.lemon.lvoverseas/Data/Movies/CapCut/User Data/Cache/effect/6798320778182922760/883ad04bd79b502aaa55b5d9b87175ea"
+FADE_OUT_PATH = "~/Library/Containers/com.lemon.lvoverseas/Data/Movies/CapCut/User Data/Cache/effect/6798320902548230669/c6f05ce62355b537be762550040bfc08"
+FADE_DUR_US   = 800_000   # 0.8초 권장
+
+def make_fade_animation(seg_dur_us, fade_dur_us=FADE_DUR_US):
+    """fade-in + fade-out 동시 적용용 material_animation 생성.
+
+    짧은 슬라이드 (fade_dur*3 미만)는 fade를 1/3로 축소 권장."""
+    actual = min(fade_dur_us, seg_dur_us // 3)
+    out_start = max(0, seg_dur_us - actual)
+    return {
+        "id": new_id(),
+        "type": "sticker_animation",
+        "animations": [
+            {
+                "id": FADE_IN_ID,
+                "type": "in",
+                "start": 0,
+                "duration": actual,
+                "path": os.path.expanduser(FADE_IN_PATH),
+                "platform": "all",
+                "resource_id": FADE_IN_ID,
+                "third_resource_id": FADE_IN_ID,
+                "source_platform": 1,
+                "name": "페이드 인",
+                "category_id": "2037708298",
+                "category_name": "Trending1",
+                "panel": "video",
+                "material_type": "video",
+                "anim_adjust_params": None,
+                "request_id": ""
+            },
+            {
+                "id": FADE_OUT_ID,
+                "type": "out",
+                "start": out_start,
+                "duration": actual,
+                "path": os.path.expanduser(FADE_OUT_PATH),
+                "platform": "all",
+                "resource_id": FADE_OUT_ID,
+                "third_resource_id": FADE_OUT_ID,
+                "source_platform": 1,
+                "name": "페이드 아웃",
+                "category_id": "2037708370",
+                "category_name": "Trending-2",
+                "panel": "video",
+                "material_type": "video",
+                "anim_adjust_params": None,
+                "request_id": ""
+            }
+        ],
+        "multi_language_current": "none"
+    }
+
+# 적용
+anim_mat = make_fade_animation(seg["target_timerange"]["duration"])
+draft["materials"]["material_animations"].append(anim_mat)
+seg["extra_material_refs"].append(anim_mat["id"])
+```
+
+#### 핵심 규칙
+
+- **start/duration 단위는 마이크로초(µs)** — `seg.target_timerange.duration` 과 동일 단위
+- `animations[i].start` 는 **세그먼트 내부 기준 오프셋** (0 = 세그먼트 시작)
+- 페이드 아웃 `start = seg_duration - fade_duration` 으로 끝에 맞춤
+- 짧은 슬라이드(예: 2초)에 0.8초 fade를 양쪽 적용하면 페이드만 보이므로 **1/3 축소** 권장
+- 페이드 인만 / 아웃만 적용하려면 `animations` 배열에 하나만 넣으면 됨
+
+---
+
 ### ⚠️ 자막 잘림 방지 — 세그먼트 분리
 
 한국어 자막은 한 줄에 **18글자 초과** 시 화면 오른쪽이 잘림.  
