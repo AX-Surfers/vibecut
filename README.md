@@ -131,6 +131,19 @@ Vibecut/
 
 ## 주요 개념
 
+### 0. 페이드 인 / 페이드 아웃 적용 (애니메이션)
+
+CapCut JSON에 페이드 인/아웃을 직접 추가하려면 **`material_animations`** 의 `sticker_animation` 타입을 사용합니다.
+
+| 효과 | resource_id | category |
+|------|-------------|----------|
+| 페이드 인 | `6798320778182922760` | Trending1 |
+| 페이드 아웃 | `6798320902548230669` | Trending-2 |
+
+> ⚠️ 페이드 인/아웃은 **서로 다른 resource_id**를 가집니다. 같은 ID로 type만 `"in"/"out"` 바꿔 적용하면 CapCut이 둘 다 페이드 아웃으로 렌더링됩니다. (실측 확인)
+
+자세한 코드 예시: [`agents/capcut/AGENT.md`](./agents/capcut/AGENT.md#페이드-인--페이드-아웃-애니메이션-적용)
+
 ### 1. 사진과 영상의 material 포맷 차이 (중요)
 
 CapCut에서 사진과 영상은 **JSON 포맷이 다릅니다**. 잘못된 포맷을 사용하면 화면이 검정으로 렌더링됩니다.
