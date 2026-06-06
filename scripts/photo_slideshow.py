@@ -252,6 +252,15 @@ def create_slideshow(
 
     # ── 1. 템플릿 복사 + UUID 갱신 ──────────────────────────────────────────────
     project_dir = CAPCUT_PROJECTS / project_name
+
+    # 기존 프로젝트 자동 백업 (덮어쓰기 안전장치)
+    if project_dir.exists():
+        try:
+            from _lib_backup import backup_project_json
+            backup_project_json(project_dir, tag="photo_slideshow")
+        except Exception as e:
+            print(f"  ⚠ 백업 건너뜀: {e}")
+
     if project_dir.exists():
         shutil.rmtree(project_dir)
     shutil.copytree(str(template_dir), str(project_dir))
@@ -582,7 +591,7 @@ def main():
 
     project_name = args.project_name or folder.name
 
-    print(f"\n[1/3] CapCut 종료")
+    print("\n[1/3] CapCut 종료")
     quit_capcut()
 
     print(f"\n[2/3] 프로젝트 생성: {project_name}")
@@ -590,7 +599,7 @@ def main():
         media_files, pairs, audio_path, srt_segments, project_name
     )
 
-    print(f"\n[3/3] 등록")
+    print("\n[3/3] 등록")
     register_project(project_dir, project_id, project_name, duration_us,
                      media_files[0] if media_files else folder)
 

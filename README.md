@@ -117,7 +117,8 @@ Vibecut/
 │   ├── add_subtitles.py         ← 영상/사진 → Whisper 자막 → CapCut 프로젝트
 │   ├── photo_slideshow.py       ← 사진 폴더 → CapCut 슬라이드쇼 (배경음악/자막 지원)
 │   ├── capcut_editor.py         ← CapCut JSON 컷편집 (무음 제거용)
-│   └── make_segments.py         ← 발화 구간 생성
+│   ├── make_segments.py         ← 발화 구간 생성
+│   └── _lib_backup.py           ← 자동 백업/복원 유틸 (모든 스크립트가 공유)
 ├── data/
 │   └── corrections.json         ← 한국어 오인식 사전 (사용할수록 누적)
 ├── AGENTS.md                    ← Codex CLI / 범용 가이드
@@ -130,6 +131,32 @@ Vibecut/
 ---
 
 ## 주요 개념
+
+### 0-A. 자동 백업 (덮어쓰기 안전장치)
+
+모든 스크립트는 CapCut 프로젝트를 수정하기 **직전에 critical JSON 파일을 자동으로 tarball 백업**합니다.
+
+| 항목 | 값 |
+|------|------|
+| 저장 위치 | `~/Movies/CapCut/User Data/Projects/.vibecut_backups/<프로젝트>/` |
+| 백업 대상 | `draft_info.json`, `draft_meta_info.json`, `Timelines/*/draft_info.json` 등 |
+| 미디어 포함 | ❌ (원본 보존돼 있음 — 보통 수백 KB) |
+| 보관 정책 | 프로젝트당 최근 20개, 오래된 것 자동 삭제 |
+| 명명 규칙 | `YYYYMMDD_HHMMSS_<태그>.tar.gz` (예: `20260606_213115_add_subtitles.tar.gz`) |
+
+**수동 백업 / 복원 / 목록 조회:**
+
+```bash
+# 수동 백업
+python3 scripts/_lib_backup.py backup ~/Movies/CapCut/.../0601 --tag manual
+
+# 최근 백업 복원
+python3 scripts/_lib_backup.py restore 0601
+
+# 전체 / 특정 프로젝트 백업 목록
+python3 scripts/_lib_backup.py list
+python3 scripts/_lib_backup.py list --project 0601
+```
 
 ### 0. 페이드 인 / 페이드 아웃 적용 (애니메이션)
 

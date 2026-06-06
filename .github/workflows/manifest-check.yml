@@ -1,0 +1,114 @@
+name: Manifest validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  skill-manifest:
+    name: SKILL.md frontmatter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install pyyaml
+      - name: Validate SKILL.md frontmatter
+        run: |
+          python3 <<'PY'
+          import sys, yaml, glob, re
+          failed = []
+          for path in sorted(glob.glob("skills/*/SKILL.md")):
+              with open(path, encoding="utf-8") as f:
+                  text = f.read()
+              m = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
+              if not m:
+                  failed.append(f"{path}: missing frontmatter")
+                  continue
+              try:
+                  fm = yaml.safe_load(m.group(1))
+              except yaml.YAMLError as e:
+                  failed.append(f"{path}: invalid YAML — {e}")
+                  continue
+              for key in ("name", "description"):
+                  if key not in fm or not fm[key]:
+                      failed.append(f"{path}: missing required field '{key}'")
+          for path in sorted(glob.glob("agents/*/AGENT.md")):
+              with open(path, encoding="utf-8") as f:
+                  text = f.read()
+              m = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
+              if not m:
+                  failed.append(f"{path}: missing frontmatter")
+                  continue
+              try:
+                  fm = yaml.safe_load(m.group(1))
+              except yaml.YAMLError as e:
+                  failed.append(f"{path}: invalid YAML — {e}")
+                  continue
+              for key in ("name", "description"):
+                  if key not in fm or not fm[key]:
+                      failed.append(f"{path}: missing required field '{key}'")
+          if failed:
+              print("\n".join(f"❌ {x}" for x in failed))
+              sys.exit(1)
+          print("✅ All SKILL.md / AGENT.md frontmatter valid")
+          PY
+
+  plugin-manifest:
+    name: Claude plugin manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate plugin.json required fields
+        run: |
+          python3 <<'PY'
+          import json, sys
+          with open(".claude-plugin/plugin.json") as f:
+              p = json.load(f)
+          required = ["name", "version", "description"]
+          missing = [k for k in required if k not in p or not p[k]]
+          if missing:
+              print(f"❌ plugin.json missing: {missing}")
+              sys.exit(1)
+          print(f"✅ plugin.json valid (name={p['name']}, version={p['version']})")
+          PY
+      - name: Validate marketplace.json
+        run: |
+          python3 <<'PY'
+          import json, sys
+          with open(".claude-plugin/marketplace.json") as f:
+              m = json.load(f)
+          if "plugins" not in m or not isinstance(m["plugins"], list):
+              print("❌ marketplace.json: 'plugins' array required")
+              sys.exit(1)
+          print(f"✅ marketplace.json valid ({len(m['plugins'])} plugin(s))")
+          PY
+
+  corrections-dict:
+    name: corrections.json schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate corrections.json structure
+        run: |
+          python3 <<'PY'
+          import json, sys
+          with open("data/corrections.json", encoding="utf-8") as f:
+              d = json.load(f)
+          if "dictionary" not in d:
+              print("❌ data/corrections.json: 'dictionary' key required")
+              sys.exit(1)
+          if not isinstance(d["dictionary"], dict):
+              print("❌ 'dictionary' must be an object")
+              sys.exit(1)
+          # 모든 키/값이 문자열인지 확인
+          for k, v in d["dictionary"].items():
+              if not isinstance(k, str) or not isinstance(v, str):
+                  print(f"❌ Non-string entry: {k!r} → {v!r}")
+                  sys.exit(1)
+          print(f"✅ corrections.json valid ({len(d['dictionary'])} entries)")
+          PY
