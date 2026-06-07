@@ -86,7 +86,7 @@ def backup_project_json(project_dir: Path, tag: str = "auto",
     files = _collect_files(project_dir)
     if not files:
         if not quiet:
-            print(f"  ⚠ 백업 건너뜀 — JSON 파일 없음")
+            print("  ⚠ 백업 건너뜀 — JSON 파일 없음")
         return None
 
     project_name = project_dir.name

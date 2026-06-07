@@ -213,7 +213,7 @@ def detect_abrupt_stop_ng(segments: list[dict],
 
         # 현재 세그먼트 이후 첫 번째 발화 구간 시작 찾기
         next_speech_start = None
-        for ss, se in sorted_spans:
+        for ss, _se in sorted_spans:
             if ss > seg["end"] + 0.1:
                 next_speech_start = ss
                 break
@@ -290,10 +290,10 @@ def main():
         else:
             print(f"  경고: speech 파일 없음 — 패턴 C 건너뜀 ({sp})")
 
-    print(f"\n[1/2] 전사 로드")
+    print("\n[1/2] 전사 로드")
     segments = load_or_transcribe(video_path, words_path, args.model)
 
-    print(f"\n[2/2] NG 패턴 감지")
+    print("\n[2/2] NG 패턴 감지")
 
     kw_ng   = detect_keyword_ng(segments)
     rep_ng  = detect_repeat_ng(segments, threshold=args.jaccard)
