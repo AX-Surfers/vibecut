@@ -59,6 +59,138 @@ TEMPLATE_DIR  = CAPCUT_PROJECTS / TEMPLATE_NAME
 
 FPS = 30
 
+# ──────────────────────────────────────────
+# 기본 자막 스타일 (템플릿 프로젝트에 texts가 없을 때 fallback)
+# 서울한강체 B, 크기 6, 그림자, 검은 외곽선
+# CapCut 프로젝트의 첫 자막 스타일에서 추출한 값
+# ──────────────────────────────────────────
+_DEFAULT_TEXT_CONTENT = {
+    "styles": [{
+        "fill": {"content": {"solid": {"color": [1, 1, 1]}, "render_type": "solid"}},
+        "range": [0, 1],
+        "shadows": [{
+            "thickness_projection_distance": 0,
+            "thickness_projection_angle": -45,
+            "diffuse": 0.05,
+            "distance": 5.0,
+            "content": {"solid": {"color": [0, 0, 0]}, "render_type": "solid"},
+            "thickness_projection_enable": False,
+            "angle": -45,
+        }],
+        "size": 6,
+        "font": {
+            "path": "/Users/seungryk/Library/Containers/com.lemon.lvoverseas/Data/Movies/"
+                    "CapCut/User Data/Cache/effect/7480847118538706181/"
+                    "892de34daab569720c6dbc43537e8cf5/font.ttf",
+            "id": "7480847118538706181",
+        },
+    }],
+    "text": "",
+}
+
+DEFAULT_TEXT_MATERIAL: dict = {
+    "recognize_task_id": "", "id": "", "name": "", "recognize_text": "",
+    "recognize_model": "", "punc_model": "", "type": "text",
+    "content": json.dumps(_DEFAULT_TEXT_CONTENT, ensure_ascii=False),
+    "base_content": "",
+    "words": {"start_time": [], "end_time": [], "text": []},
+    "current_words": {"start_time": [], "end_time": [], "text": []},
+    "global_alpha": 1.0,
+    "combo_info": {"text_templates": []},
+    "caption_template_info": {
+        "resource_id": "", "third_resource_id": "", "resource_name": "",
+        "category_id": "", "category_name": "", "effect_id": "", "request_id": "",
+        "path": "", "is_new": False, "source_platform": 0,
+    },
+    "layer_weight": 0, "letter_spacing": 0.0, "text_curve": None,
+    "text_loop_on_path": False, "offset_on_path": 0.0,
+    "enable_path_typesetting": False, "text_exceeds_path_process_type": 0,
+    "text_typesetting_paths": None, "text_typesetting_paths_file": "",
+    "text_typesetting_path_index": 0,
+    "line_spacing": 0.02,
+    "has_shadow": True, "shadow_color": "#000000", "shadow_alpha": 1.0,
+    "shadow_smoothing": 0.9, "shadow_distance": 5.0,
+    "shadow_point": {"x": 0.6363961030678928, "y": -0.6363961030678927},
+    "shadow_angle": -45.0, "shadow_thickness_projection_enable": False,
+    "shadow_thickness_projection_angle": 0.0, "shadow_thickness_projection_distance": 0.0,
+    "border_alpha": 1.0, "border_color": "#000000", "border_width": 0.15, "border_mode": 0,
+    "style_name": "", "text_color": "", "text_alpha": 1.0,
+    "font_name": "", "font_title": "",
+    "font_size": 6.0,
+    "font_path": "/Users/seungryk/Library/Containers/com.lemon.lvoverseas/Data/Movies/"
+                 "CapCut/User Data/Cache/effect/7480847118538706181/"
+                 "892de34daab569720c6dbc43537e8cf5/font.ttf",
+    "font_id": "", "font_resource_id": "7480847118538706181",
+    "initial_scale": 0.0, "font_url": "", "typesetting": 0, "alignment": 1, "line_feed": 1,
+    "use_effect_default_color": True, "is_rich_text": False,
+    "shape_clip_x": False, "shape_clip_y": False, "ktv_color": "",
+    "text_to_audio_ids": [], "bold_width": 0.0, "italic_degree": 0,
+    "underline": False, "underline_width": 0.05, "underline_offset": 0.22,
+    "sub_type": 0, "check_flag": 39, "text_size": 30,
+    "font_category_name": "", "font_source_platform": 1,
+    "font_third_resource_id": "", "font_category_id": "",
+    "fonts": [{
+        "id": "", "resource_id": "7480847118538706181", "third_resource_id": "",
+        "category_id": "preset", "category_name": "사전 설정", "source_platform": 1,
+        "path": "/Users/seungryk/Library/Containers/com.lemon.lvoverseas/Data/Movies/"
+                "CapCut/User Data/Cache/effect/7480847118538706181/"
+                "892de34daab569720c6dbc43537e8cf5/font.ttf",
+        "effect_id": "7480847118538706181", "title": "서울한강체 B",
+        "team_id": "", "file_uri": "", "request_id": "",
+    }],
+    "add_type": 0, "operation_type": 0, "recognize_type": 0,
+    "background_color": "", "background_alpha": 1.0, "background_style": 0,
+    "background_round_radius": 0.0, "background_width": 0.14,
+    "background_height": 0.14, "background_vertical_offset": 0.0,
+    "background_horizontal_offset": 0.0, "background_fill": "",
+    "single_char_bg_enable": False, "single_char_bg_color": "", "single_char_bg_alpha": 1.0,
+    "single_char_bg_round_radius": 0.3, "single_char_bg_width": 0.0,
+    "single_char_bg_height": 0.0, "single_char_bg_vertical_offset": 0.0,
+    "single_char_bg_horizontal_offset": 0.0,
+    "font_team_id": "", "tts_auto_update": False, "text_preset_resource_id": "",
+    "group_id": "", "preset_id": "", "preset_name": "", "preset_category": "",
+    "preset_category_id": "", "preset_index": 0, "preset_has_set_alignment": False,
+    "force_apply_line_max_width": False, "language": "", "relevance_segment": [],
+    "original_size": [], "fixed_width": -1.0, "fixed_height": -1.0,
+    "line_max_width": 0.82, "oneline_cutoff": False, "cutoff_postfix": "",
+    "subtitle_template_original_fontsize": 0.0, "subtitle_keywords": None,
+    "inner_padding": -1.0, "multi_language_current": "none", "source_from": "",
+    "is_lyric_effect": False, "lyric_group_id": "", "ssml_content": "",
+    "subtitle_keywords_config": None, "sub_template_id": -1, "translate_original_text": "",
+}
+
+DEFAULT_TEXT_SEGMENT: dict = {
+    "id": "", "source_timerange": None,
+    "target_timerange": {"start": 0, "duration": 1000000},
+    "render_timerange": {"start": 0, "duration": 0},
+    "desc": "", "state": 0, "speed": 1.0, "is_loop": False, "is_tone_modify": False,
+    "reverse": False, "intensifies_audio": False, "cartoon": False,
+    "volume": 1.0, "last_nonzero_volume": 1.0,
+    "clip": {
+        "scale": {"x": 1.0, "y": 1.0}, "rotation": 0.0,
+        "transform": {"x": 0.0, "y": -0.7407407407407407},
+        "flip": {"vertical": False, "horizontal": False}, "alpha": 1.0,
+    },
+    "uniform_scale": {"on": True, "value": 1.0},
+    "material_id": "", "extra_material_refs": [], "render_index": 14000,
+    "keyframe_refs": [], "enable_lut": False, "enable_adjust": False,
+    "enable_hsl": False, "visible": True, "group_id": "",
+    "enable_color_curves": True, "enable_hsl_curves": True, "track_render_index": 1,
+    "hdr_settings": None, "enable_color_wheels": True, "track_attribute": 0,
+    "is_placeholder": False, "template_id": "", "enable_smart_color_adjust": False,
+    "template_scene": "default", "common_keyframes": [], "caption_info": None,
+    "responsive_layout": {
+        "enable": False, "target_follow": "", "size_layout": 0,
+        "horizontal_pos_layout": 0, "vertical_pos_layout": 0,
+    },
+    "enable_color_match_adjust": False, "enable_color_correct_adjust": False,
+    "enable_adjust_mask": False, "raw_segment_id": "", "lyric_keyframes": None,
+    "enable_video_mask": True, "digital_human_template_group_id": "",
+    "color_correct_alg_result": "", "source": "segmentsourcenormal",
+    "enable_mask_stroke": False, "enable_mask_shadow": False,
+    "enable_color_adjust_pro": False,
+}
+
 
 # ──────────────────────────────────────────
 # 유틸
@@ -686,58 +818,81 @@ def create_project(video_path: Path, segments: list[dict], project_name: str) ->
         except Exception as e:
             print(f"  ⚠ 백업 건너뜀: {e}")
 
-    # ── 2-1. 기존 프로젝트 삭제 후 템플릿 통째로 복사 ──────────────────
-    # 이 방법만이 CapCut이 요구하는 수십 개 필수 파일을 모두 포함할 수 있음
-    # (직접 JSON 조립 시 attachment_editing.json, draft.extra 등 누락 → 열리지 않음)
-    if project_dir.exists():
-        shutil.rmtree(project_dir)
-    shutil.copytree(str(TEMPLATE_DIR), str(project_dir))
-    print(f"  템플릿 복사: {TEMPLATE_NAME} → {project_name}")
+    # ── 2-1. 프로젝트 디렉토리 준비 ────────────────────────────────────
+    # [A] 템플릿이 있을 때: 기존 프로젝트 삭제 후 템플릿 전체 복사
+    #     (CapCut이 요구하는 attachment_editing.json 등 부수 파일을 모두 포함)
+    # [B] 템플릿이 없을 때: 기존 project_dir을 그대로 사용 (삭제·복사 없음)
+    #     → 기존 컷편집 프로젝트에 자막만 주입할 때 안전하게 동작
+    use_template = TEMPLATE_DIR.exists()
 
-    # ── 2-2. 새 Timeline UUID 생성 ─────────────────────────────────────
-    # 템플릿과 UUID를 공유하면 CapCut이 두 프로젝트를 혼동함 → 반드시 새 UUID
-    old_uuid = next(
-        e.name for e in (project_dir / "Timelines").iterdir()
-        if e.is_dir() and "-" in e.name
-    )
-    new_timeline_uuid = new_id()
-    old_tl_dir = project_dir / "Timelines" / old_uuid
-    new_tl_dir = project_dir / "Timelines" / new_timeline_uuid
-    old_tl_dir.rename(new_tl_dir)
-    print(f"  Timeline UUID: {old_uuid[:8]}… → {new_timeline_uuid[:8]}…")
+    if use_template:
+        if project_dir.exists():
+            shutil.rmtree(project_dir)
+        shutil.copytree(str(TEMPLATE_DIR), str(project_dir))
+        print(f"  템플릿 복사: {TEMPLATE_NAME} → {project_name}")
+    else:
+        if not project_dir.exists():
+            raise FileNotFoundError(
+                f"템플릿({TEMPLATE_DIR})도 없고 대상 프로젝트({project_dir})도 없음. "
+                "CapCut에서 프로젝트를 먼저 만들거나 TEMPLATE_NAME을 설정하세요."
+            )
+        print(f"  ⚠ 템플릿 없음 — 기존 프로젝트 재사용: {project_name}")
+
+    # ── 2-2. Timeline UUID 결정 ────────────────────────────────────────
+    if use_template:
+        # 템플릿 UUID를 새 UUID로 교체 (두 프로젝트 혼동 방지)
+        old_uuid = next(
+            e.name for e in (project_dir / "Timelines").iterdir()
+            if e.is_dir() and "-" in e.name
+        )
+        new_timeline_uuid = new_id()
+        old_tl_dir = project_dir / "Timelines" / old_uuid
+        new_tl_dir = project_dir / "Timelines" / new_timeline_uuid
+        old_tl_dir.rename(new_tl_dir)
+        print(f"  Timeline UUID: {old_uuid[:8]}… → {new_timeline_uuid[:8]}…")
+    else:
+        # 기존 프로젝트 UUID 그대로 유지
+        new_tl_dir = next(
+            e for e in (project_dir / "Timelines").iterdir()
+            if e.is_dir() and "-" in e.name
+        )
+        new_timeline_uuid = new_tl_dir.name
+        print(f"  Timeline UUID: {new_timeline_uuid[:8]}… (재사용)")
 
     # ── 2-3. Timelines/project.json 업데이트 ──────────────────────────
-    # CapCut이 직접 만든 프로젝트(0531) 기준으로 확인된 올바른 형식:
-    # - 외부 id ≠ main_timeline_id (별도 UUID)
-    # - color_space: -1  (0은 잘못된 값)
-    # - render_index_track_mode_on: False
-    now_us = int(time.time() * 1_000_000)
-    outer_id = new_id()  # main_timeline_id와 반드시 다른 UUID
-    proj_json = {
-        "config": {
-            "color_space": -1,
-            "render_index_track_mode_on": False,
-            "use_float_render": False
-        },
-        "create_time": now_us,
-        "id": outer_id,                    # 외부 id는 별도 UUID
-        "main_timeline_id": new_timeline_uuid,
-        "timelines": [{
+    # (템플릿 모드에서만 재생성 — 기존 프로젝트 모드에서는 유지)
+    if use_template:
+        now_us = int(time.time() * 1_000_000)
+        outer_id = new_id()  # main_timeline_id와 반드시 다른 UUID
+        proj_json = {
+            "config": {
+                "color_space": -1,
+                "render_index_track_mode_on": False,
+                "use_float_render": False
+            },
             "create_time": now_us,
-            "id": new_timeline_uuid,
-            "is_marked_delete": False,
-            "name": "타임라인 01",
-            "update_time": now_us
-        }],
-        "update_time": now_us,
-        "version": 0
-    }
-    proj_str = json.dumps(proj_json, ensure_ascii=False, indent=2)
-    (project_dir / "Timelines" / "project.json").write_text(proj_str, encoding="utf-8")
-    (project_dir / "Timelines" / "project.json.bak").write_text(proj_str, encoding="utf-8")
+            "id": outer_id,
+            "main_timeline_id": new_timeline_uuid,
+            "timelines": [{
+                "create_time": now_us,
+                "id": new_timeline_uuid,
+                "is_marked_delete": False,
+                "name": "타임라인 01",
+                "update_time": now_us
+            }],
+            "update_time": now_us,
+            "version": 0
+        }
+        proj_str = json.dumps(proj_json, ensure_ascii=False, indent=2)
+        (project_dir / "Timelines" / "project.json").write_text(proj_str, encoding="utf-8")
+        (project_dir / "Timelines" / "project.json.bak").write_text(proj_str, encoding="utf-8")
 
-    # ── 2-4. draft_info.json 수정 ──────────────────────────────────────
-    with open(TEMPLATE_DIR / "draft_info.json") as f:
+    # ── 2-4. draft_info.json 로드 ──────────────────────────────────────
+    # 템플릿 모드: TEMPLATE_DIR/draft_info.json 사용
+    # 기존 프로젝트 모드: project_dir 내 Timelines/{uuid}/draft_info.json 사용
+    draft_source = TEMPLATE_DIR / "draft_info.json" if use_template \
+                   else new_tl_dir / "draft_info.json"
+    with open(draft_source) as f:
         draft = json.load(f)
 
     video_dur_us = get_video_duration_us(video_path)
@@ -823,8 +978,11 @@ def create_project(video_path: Path, segments: list[dict], project_name: str) ->
 
     # 자막 트랙 (기존 text material 구조를 deepcopy해서 id/content만 교체)
     # 처음부터 조립하면 누락 필드 발생 → 반드시 deepcopy 방식 사용
-    orig_text = draft["materials"]["texts"][0]
-    orig_tseg = draft["tracks"][1]["segments"][0]
+    # 템플릿/프로젝트에 texts가 없으면 DEFAULT_TEXT_MATERIAL (서울한강체 B) 사용
+    _texts = draft["materials"].get("texts", [])
+    orig_text = _texts[0] if _texts else copy.deepcopy(DEFAULT_TEXT_MATERIAL)
+    _track1_segs = draft["tracks"][1]["segments"] if len(draft["tracks"]) > 1 else []
+    orig_tseg = _track1_segs[0] if _track1_segs else copy.deepcopy(DEFAULT_TEXT_SEGMENT)
 
     text_materials = []
     text_segments  = []
@@ -877,8 +1035,19 @@ def create_project(video_path: Path, segments: list[dict], project_name: str) ->
             text_segments.append(new_tseg)
             render_idx += 1
 
-    text_track = copy.deepcopy(draft["tracks"][1])
-    text_track["id"] = new_id()
+    # 자막 트랙 구성 — tracks[1]이 없으면 기본 text 트랙 구조로 대체
+    if len(draft["tracks"]) > 1:
+        text_track = copy.deepcopy(draft["tracks"][1])
+        text_track["id"] = new_id()
+    else:
+        text_track = {
+            "id": new_id(),
+            "attribute": 0,
+            "flag": 0,
+            "is_default_name": True,
+            "name": "",
+            "type": "text",
+        }
     text_track["segments"] = text_segments
 
     # materials 교체
@@ -1073,9 +1242,16 @@ def main():
         print(f"오류: 파일 없음 — {video_path}", file=sys.stderr)
         sys.exit(1)
     if not TEMPLATE_DIR.exists():
-        print(f"오류: 템플릿 프로젝트 없음 — {TEMPLATE_DIR}", file=sys.stderr)
-        print("      TEMPLATE_NAME 상수를 실제 존재하는 프로젝트명으로 변경하세요.")
-        sys.exit(1)
+        # 템플릿이 없어도 기존 CapCut 프로젝트가 있으면 그대로 자막 주입 가능
+        # (서울한강체 B 기본 스타일 사용)
+        project_name = args.project_name or video_path.stem
+        target_dir = CAPCUT_PROJECTS / project_name
+        if not target_dir.exists():
+            print(f"오류: 템플릿({TEMPLATE_DIR})도 없고 대상 프로젝트({target_dir})도 없음.",
+                  file=sys.stderr)
+            print("      CapCut에서 프로젝트를 먼저 만들거나 TEMPLATE_NAME을 설정하세요.")
+            sys.exit(1)
+        print(f"⚠  템플릿 없음 — 기존 프로젝트에 기본 스타일(서울한강체 B)로 자막 주입: {project_name}")
 
     # 편집 타임라인 segments 로드 (--segments 지정 시)
     edit_segments: list[list[float]] | None = None
