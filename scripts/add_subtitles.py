@@ -425,6 +425,14 @@ def split_with_word_sync(seg: dict, max_chars: int = 18) -> list[dict]:
     if current_words:
         parts.append(current_words)
 
+    # 후처리: 관형사·지시사가 그룹 마지막 단어면 다음 그룹으로 이동
+    # 예: ["...활용해서", "이"] → ["...활용해서"] / ["이", "스킬을 ..."]
+    _DANGLING_ARTICLES = {"이", "그", "저", "이런", "그런", "저런", "한", "어떤", "각", "제"}
+    for j in range(len(parts) - 1):
+        if parts[j] and parts[j][-1]["word"].strip() in _DANGLING_ARTICLES:
+            moved = parts[j].pop()
+            parts[j + 1].insert(0, moved)
+
     # 각 그룹을 자막 dict로 변환
     result = []
     for group in parts:
