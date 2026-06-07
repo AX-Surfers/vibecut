@@ -450,6 +450,39 @@ _SHORT_TAIL_ENDINGS = (
 )
 
 
+def merge_cross_segment_parts(
+    parts: list[dict],
+    max_gap: float = 0.5,
+    max_merged_chars: int = 27,
+) -> list[dict]:
+    """서로 다른 Whisper 세그먼트에서 나온 인접 파트 중 문장이 미완성으로 끊긴 경우를 병합.
+
+    컷편집 이음매에서 Whisper가 하나의 문장을 두 세그먼트로 나누면
+    _merge_short_tails()가 처리하지 못하는 cross-segment 케이스를 여기서 처리.
+
+    조건 (모두 충족 시 병합):
+    1. prev.text가 종결어미(_SHORT_TAIL_ENDINGS)로 끝나지 않음  ← 문장 미완성
+    2. next.start - prev.end ≤ max_gap (기본 0.5초)             ← 바로 이어지는 파트
+    3. 합친 길이 ≤ max_merged_chars (기본 27자)                  ← 한 자막에 담을 수 있음
+    """
+    if len(parts) < 2:
+        return parts
+
+    merged = [parts[0]]
+    for part in parts[1:]:
+        prev = merged[-1]
+        gap = part["start"] - prev["end"]
+        merged_len = len(prev["text"]) + 1 + len(part["text"])
+        is_complete = prev["text"].endswith(_SHORT_TAIL_ENDINGS)
+
+        if not is_complete and gap <= max_gap and merged_len <= max_merged_chars:
+            prev["text"] = prev["text"] + " " + part["text"]
+            prev["end"] = part["end"]
+        else:
+            merged.append(part)
+    return merged
+
+
 def _merge_short_tails(parts: list[dict], max_chars: int = 18,
                        min_tail_chars: int = 5,
                        max_merged_chars: int = 27) -> list[dict]:
@@ -994,6 +1027,8 @@ def create_project(video_path: Path, segments: list[dict], project_name: str) ->
             continue
         parts = split_with_word_sync(seg, max_chars=18)
         all_parts.extend(parts)
+    # 컷편집 이음매에서 나뉜 미완성 문장을 cross-segment 병합
+    all_parts = merge_cross_segment_parts(all_parts)
     all_parts = remove_overlaps(all_parts, min_gap=0.02)
 
     render_idx = 0
