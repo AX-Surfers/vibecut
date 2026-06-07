@@ -220,6 +220,38 @@ def apply_filler_filter(spans, transcript_data, speech_spans, max_dur=5.0):
 
 
 # ──────────────────────────────────────────────
+# Whisper 세그먼트 기반 클립 단위 생성
+# ──────────────────────────────────────────────
+
+def build_from_words_json(words_json_path, ng_spans=None, pad=0.05,
+                          merge_gap=MERGE_GAP_SEC, min_dur=MIN_SPEECH_SEC,
+                          ng_threshold=NG_REMOVE_THRESHOLD):
+    """faster-whisper words.json 세그먼트를 클립 단위로 변환.
+
+    ffmpeg 발화 구간 대신 Whisper가 인식한 문장 단위를 클립 경계로 사용.
+    → 문장 중간 잘림 원천 차단 (Whisper 세그먼트가 문장 의미 단위로 분리됨)
+    → 문장 사이 침묵은 자동 제거 (취할 구간만 열거하므로)
+
+    words_json: [{"start": float, "end": float, "text": str, "words": [...]}, ...]
+    """
+    with open(words_json_path, encoding='utf-8') as f:
+        segments = json.load(f)
+
+    spans = [(max(0.0, s['start'] - pad), s['end'] + pad)
+             for s in segments if s['end'] - s['start'] >= min_dur]
+
+    total_before = len(spans)
+    if ng_spans:
+        spans = apply_ng_filter(spans, ng_spans, threshold=ng_threshold)
+        print(f'  NG 필터: {total_before}개 → {len(spans)}개')
+
+    result = merge_gaps(spans, gap_sec=merge_gap, min_dur=min_dur)
+    total_sec = sum(e - s for s, e in result)
+    print(f'  Whisper 세그먼트 기반: {len(result)}개 구간, {total_sec:.0f}초 ({total_sec/60:.1f}분)')
+    return result
+
+
+# ──────────────────────────────────────────────
 # 메인 파이프라인
 # ──────────────────────────────────────────────
 
@@ -319,7 +351,9 @@ def main():
     parser.add_argument('--ng', default=None,
                         help='NG 로그 JSON (선택)')
     parser.add_argument('--transcript', default='/tmp/transcript.json',
-                        help='whisper 전사 결과 JSON (선택)')
+                        help='whisper 전사 결과 JSON (선택, whisper.cpp 포맷)')
+    parser.add_argument('--words-json', default=None,
+                        help='faster-whisper words.json 경로 (지정 시 Whisper 세그먼트 기반 모드 — 문장 중간 잘림 방지)')
     parser.add_argument('--out', default='/tmp/final_segments.json',
                         help='출력 JSON 경로')
     parser.add_argument('--ng-threshold', type=float, default=NG_REMOVE_THRESHOLD,
@@ -328,16 +362,43 @@ def main():
                         help=f'갭 병합 임계값(초) (기본: {MERGE_GAP_SEC})')
     args = parser.parse_args()
 
-    # 파라미터를 make_segments에 직접 전달
-    # 전역 변수 오버라이드 대신 함수 파라미터로 처리
-    make_segments(
-        speech_path=args.speech,
-        ng_path=args.ng,
-        transcript_path=args.transcript,
-        out_path=args.out,
-        ng_threshold=args.ng_threshold,
-        merge_gap=args.merge_gap,
-    )
+    # Whisper 세그먼트 기반 모드 (--words-json 지정 시)
+    if args.words_json and Path(args.words_json).exists():
+        print('=== Whisper 세그먼트 기반 클립 생성 ===')
+        print(f'  words.json: {args.words_json}')
+        print(f'  파라미터: NG_THRESHOLD={args.ng_threshold:.0%}, MERGE_GAP={args.merge_gap}s')
+
+        # NG 스팬 로드
+        ng_spans = []
+        if args.ng and Path(args.ng).exists():
+            with open(args.ng) as f:
+                ng_data = json.load(f)
+            ng_spans = ng_data['ng_spans']
+            print(f'  NG 로그: {len(ng_spans)}개 구간')
+
+        spans = build_from_words_json(
+            args.words_json,
+            ng_spans=ng_spans,
+            pad=0.05,
+            merge_gap=args.merge_gap,
+            min_dur=0.3,
+            ng_threshold=args.ng_threshold,
+        )
+
+        with open(args.out, 'w') as f:
+            json.dump([[s, e] for s, e in spans], f)
+        print(f'\n저장: {args.out}')
+
+    else:
+        # 기존 ffmpeg speech 기반 모드 (하위 호환)
+        make_segments(
+            speech_path=args.speech,
+            ng_path=args.ng,
+            transcript_path=args.transcript,
+            out_path=args.out,
+            ng_threshold=args.ng_threshold,
+            merge_gap=args.merge_gap,
+        )
 
 
 if __name__ == '__main__':

@@ -806,7 +806,7 @@ AskUserQuestion(questions=[{
 
 **선택된 모델을 `--model` 플래그로 전달:**
 ```bash
-/usr/local/bin/python3.11 scripts/add_subtitles.py <video.mov> --model <선택된모델> --no-verify
+uv run scripts/add_subtitles.py <video.mov> --model <선택된모델> --no-verify
 ```
 
 **선택 가이드:**
@@ -839,7 +839,7 @@ Whisper SRT → [사전 1차 적용] → [LLM 검증] → 검증된 SRT
 #### 1단계: Whisper로 자막 생성
 
 ```bash
-/usr/local/bin/python3.11 scripts/add_subtitles.py <video.mov> --no-verify
+uv run scripts/add_subtitles.py <video.mov> --no-verify
 ```
 
 - `<video>.srt` 파일이 생성된다 (이미 있으면 재사용)
@@ -864,7 +864,7 @@ Task(
 #### 3단계: 검증된 자막으로 CapCut 프로젝트 재생성
 
 ```bash
-/usr/local/bin/python3.11 scripts/add_subtitles.py <video.mov> --srt <video>_verified.srt
+uv run scripts/add_subtitles.py <video.mov> --srt <video>_verified.srt
 ```
 
 - 기존 프로젝트 폴더는 자동으로 덮어씌워짐
@@ -898,23 +898,23 @@ Task(
 
 ```bash
 # 기본 (small 모델, 권장)
-/usr/local/bin/python3.11 scripts/add_subtitles.py video.mov
+uv run scripts/add_subtitles.py video.mov
 
 # 모델 선택 (human-in-the-loop으로 사용자가 선택)
-/usr/local/bin/python3.11 scripts/add_subtitles.py video.mov --model medium
-/usr/local/bin/python3.11 scripts/add_subtitles.py video.mov --model large-v3 --beam-size 5
+uv run scripts/add_subtitles.py video.mov --model medium
+uv run scripts/add_subtitles.py video.mov --model large-v3 --beam-size 5
 
 # SRT 있으면 Whisper 생략 (또는 자동으로 .srt 캐시 활용)
-/usr/local/bin/python3.11 scripts/add_subtitles.py video.mov --srt video.srt
+uv run scripts/add_subtitles.py video.mov --srt video.srt
 
 # 프로젝트 이름 지정
-/usr/local/bin/python3.11 scripts/add_subtitles.py video.mov --project-name my_project
+uv run scripts/add_subtitles.py video.mov --project-name my_project
 ```
 
 | 항목 | 값 |
 |------|----|
-| Python 실행환경 | `/usr/local/bin/python3.11` (faster-whisper 설치됨) |
-| 기본 python3 | ❌ torch arm64/x86 불일치로 사용 불가 |
+| Python 실행환경 | `uv run` (의존성 자동 관리, faster-whisper 포함) |
+| Whisper 입력 | 영상 직접 X → **16kHz mono WAV 자동 추출 후 전사** ({stem}_audio.wav 캐시) |
 | Whisper 모델 | `--model {tiny|base|small|medium|large-v3}` (기본: small, 사용자 선택) |
 | beam_size | `--beam-size N` (기본 1, large-v3는 5 권장) |
 | 템플릿 프로젝트 | `CAPCUT_PROJECTS/0530` (스크립트 상단 `TEMPLATE_NAME` 상수) |
@@ -956,6 +956,8 @@ python3 scripts/capcut_editor.py /tmp/final_segments.json \
 ## 컷편집 전체 파이프라인
 
 ```bash
+SCRIPTS="/Users/seungryk/youtube/vibecut/scripts"
+
 # 1. 무음 구간 감지 (-35dB 이하, 0.5초 이상)
 ffmpeg -i input.mp4 -af silencedetect=noise=-35dB:d=0.5 -f null - 2>&1 \
   | grep -E "silence_(start|end)" > /tmp/silence_data.txt
@@ -963,21 +965,26 @@ ffmpeg -i input.mp4 -af silencedetect=noise=-35dB:d=0.5 -f null - 2>&1 \
 # 2. 발화 구간 계산 → /tmp/speech_segments.json
 #    (silence_data.txt 파싱, MIN_SPEECH=0.3초, PAD=0.05초)
 
-# 3. (선택) 발화 구간으로 WAV 추출 → whisper 전사
-ffmpeg -i input.mp4 [speech_only.wav 생성]
-whisper-cli -m ~/whisper-models/ggml-small.bin -l ko --output-json \
-  -of /tmp/transcript /tmp/speech_only.wav > /tmp/whisper_full.txt 2>&1
-
-# 4. 편집 구간 생성 (개선판)
-python3 scripts/make_segments.py \
+# 3. NG 자동 감지 (오디오 자동 추출 → Whisper 전사 → 패턴 분석)
+#    _words.json 캐시 있으면 전사 생략, _audio.wav 캐시 있으면 추출 생략
+uv run "${SCRIPTS}/detect_ng.py" input.mp4 \
   --speech /tmp/speech_segments.json \
-  --ng hwp(원본)_ng_log.json \
-  --transcript /tmp/transcript.json \
+  --out /tmp/ng_log.json
+
+# 4. 편집 구간 생성 (NG 필터 포함)
+uv run "${SCRIPTS}/make_segments.py" \
+  --speech /tmp/speech_segments.json \
+  --ng /tmp/ng_log.json \
   --out /tmp/final_segments.json
 
 # 5. CapCut JSON 적용
-python3 scripts/capcut_editor.py /tmp/final_segments.json
+uv run "${SCRIPTS}/capcut_editor.py" /tmp/final_segments.json
 ```
+
+**오디오 캐시 전략:**
+- `{stem}_audio.wav` — 영상에서 추출한 전체 오디오 (16kHz mono). ffmpeg 추출 1회 후 재사용.
+- `{stem}_words.json` — Whisper 전사 결과. detect_ng / add_subtitles 공유 캐시.
+- `{stem}_edited_audio.wav` — 편집 구간만 이어붙인 오디오 (--segments 모드 시).
 
 ### make_segments.py 파라미터 (사용자 편집 기준 반영)
 

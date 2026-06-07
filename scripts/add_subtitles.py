@@ -370,6 +370,36 @@ def is_photo(path: Path) -> bool:
     return path.suffix.lower() in PHOTO_EXTENSIONS
 
 
+def extract_audio_from_segments(video_path: Path, segments: list[list[float]], out_wav: Path) -> None:
+    """편집된 구간만 오디오를 추출·연결해 WAV로 저장.
+
+    segments: [[start_sec, end_sec], ...] — auto-edit이 남긴 발화 구간
+    연결된 오디오의 타임스탬프 = CapCut 편집 타임라인 타임스탬프 (1:1 대응)
+    """
+    if not segments:
+        raise ValueError("segments가 비어 있음")
+
+    # ffmpeg filter_complex로 각 구간을 잘라 연결
+    inputs = ["-i", str(video_path)]
+    filter_parts = []
+    for i, (s, e) in enumerate(segments):
+        filter_parts.append(f"[0:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]")
+    concat_inputs = "".join(f"[a{i}]" for i in range(len(segments)))
+    filter_parts.append(f"{concat_inputs}concat=n={len(segments)}:v=0:a=1[aout]")
+
+    cmd = ["ffmpeg", "-y"] + inputs + [
+        "-filter_complex", ";".join(filter_parts),
+        "-map", "[aout]",
+        "-ar", "16000", "-ac", "1",
+        str(out_wav)
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print("ffmpeg 오디오 추출 오류:", result.stderr[-800:], file=sys.stderr)
+        sys.exit(1)
+    print(f"  → 편집 구간 오디오 추출: {len(segments)}개 구간, {out_wav.name}")
+
+
 def get_video_duration_us(video_path: Path) -> int:
     result = subprocess.run(
         ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
@@ -396,26 +426,53 @@ def quit_capcut():
 # ──────────────────────────────────────────
 # Step 1: Whisper 전사
 # ──────────────────────────────────────────
-def transcribe(video_path: Path, model_name: str = "small", beam_size: int = 1) -> list[dict]:
+def extract_audio(video_path: Path) -> Path:
+    """영상에서 16kHz mono WAV 오디오 추출 (Whisper 최적 포맷).
+
+    캐시({stem}_audio.wav)가 있으면 재사용.
+    반환: WAV 경로
+    """
+    wav_path = video_path.with_name(video_path.stem + "_audio.wav")
+    if wav_path.exists():
+        print(f"  오디오 캐시 사용: {wav_path.name}")
+        return wav_path
+    print(f"  오디오 추출 중: {video_path.name} → {wav_path.name}")
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(video_path),
+         "-vn", "-ar", "16000", "-ac", "1", str(wav_path)],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print("ffmpeg 오디오 추출 오류:", result.stderr[-400:], file=sys.stderr)
+        sys.exit(1)
+    size_mb = wav_path.stat().st_size / 1024 / 1024
+    print(f"  → {wav_path.name} ({size_mb:.1f}MB)")
+    return wav_path
+
+
+def transcribe(video_path: Path, model_name: str = "small", beam_size: int = 1,
+               audio_path: Path | None = None) -> list[dict]:
     """faster-whisper로 한국어 전사 + 단어 타임스탬프.
 
-    model_name: tiny / base / small / medium / large-v3
-    - tiny: ~30초 (5분 영상), 정확도 매우 낮음
-    - base: ~1분, 보통
-    - small: ~3분, 좋음 (★ 기본값, 균형)
-    - medium: ~10-20분, 매우 좋음
-    - large-v3: ~30-60분, 최고 정확도
-
-    beam_size: 클수록 정확하지만 느림 (small/medium은 1, large는 5 권장)
+    audio_path: 편집 구간만 추출된 WAV (--segments 모드). 지정 시 그 파일 전사.
+    지정 안 하면 video_path에서 오디오를 자동 추출한 WAV로 전사.
+    영상 파일을 직접 넘기지 않고 항상 WAV를 경유함.
 
     반환: [{start, end, text, words: [{start, end, word}, ...]}, ...]
     """
-    py = "/usr/local/bin/python3.11"
-    print(f"  모델: {model_name}, beam_size: {beam_size}")
+    py = sys.executable
+    # 편집 구간 오디오가 명시된 경우 그것을 사용, 아니면 전체 오디오 추출
+    if audio_path:
+        target = audio_path
+        print(f"  모델: {model_name}, beam_size: {beam_size}")
+        print(f"  전사 대상: 편집된 오디오 ({audio_path.name})")
+    else:
+        target = extract_audio(video_path)
+        print(f"  모델: {model_name}, beam_size: {beam_size}")
     script = (
         "from faster_whisper import WhisperModel\nimport json\n"
         f'model = WhisperModel("{model_name}", device="cpu", compute_type="int8")\n'
-        f'segs, _ = model.transcribe("{video_path}", language="ko", beam_size={beam_size}, word_timestamps=True)\n'
+        f'segs, _ = model.transcribe("{target}", language="ko", beam_size={beam_size}, word_timestamps=True)\n'
         "result = []\n"
         "for s in segs:\n"
         "    words = [{'start': w.start, 'end': w.end, 'word': w.word} for w in (s.words or [])]\n"
@@ -1005,6 +1062,8 @@ def main():
                         help="Whisper 모델 (tiny: 가장 빠름~large-v3: 가장 정확). 기본 small.")
     parser.add_argument("--beam-size",     type=int, default=1,
                         help="Whisper beam_size (클수록 정확, 느림). 기본 1.")
+    parser.add_argument("--segments",      default=None,
+                        help="auto-edit 결과 segments JSON 경로 (지정 시 편집 타임라인 기준 오디오 추출 후 전사)")
     args = parser.parse_args()
 
     video_path   = Path(args.video).resolve()
@@ -1018,10 +1077,30 @@ def main():
         print("      TEMPLATE_NAME 상수를 실제 존재하는 프로젝트명으로 변경하세요.")
         sys.exit(1)
 
+    # 편집 타임라인 segments 로드 (--segments 지정 시)
+    edit_segments: list[list[float]] | None = None
+    extracted_audio: Path | None = None
+    if args.segments:
+        seg_path = Path(args.segments).resolve()
+        if not seg_path.exists():
+            print(f"오류: segments 파일 없음 — {seg_path}", file=sys.stderr)
+            sys.exit(1)
+        with open(seg_path, encoding="utf-8") as f:
+            edit_segments = json.load(f)
+        print(f"\n[0/3] 편집 타임라인 오디오 추출 ({len(edit_segments)}개 구간)")
+        extracted_audio = video_path.with_name(video_path.stem + "_edited_audio.wav")
+        extract_audio_from_segments(video_path, edit_segments, extracted_audio)
+
     print("\n[1/3] 음성 인식")
     srt_cache = video_path.with_suffix(".srt")
     verified_srt = video_path.with_name(video_path.stem + "_verified.srt")
     words_cache = video_path.with_name(video_path.stem + "_words.json")  # 단어 타임스탬프 캐시
+
+    # --segments가 지정되면 캐시 무효화 (편집 기준 재전사)
+    if edit_segments is not None:
+        srt_cache    = video_path.with_name(video_path.stem + "_edited.srt")
+        verified_srt = video_path.with_name(video_path.stem + "_edited_verified.srt")
+        words_cache  = video_path.with_name(video_path.stem + "_edited_words.json")
 
     # 단어 타임스탬프 로드/생성 (음성 ↔ 자막 정확한 싱크용)
     word_segments = None
@@ -1038,7 +1117,8 @@ def main():
         print("  캐시된 SRT + 단어 타임스탬프 발견 — Whisper 생략")
         segments = load_srt(srt_cache)
     else:
-        segments = transcribe(video_path, model_name=args.model, beam_size=args.beam_size)
+        segments = transcribe(video_path, model_name=args.model, beam_size=args.beam_size,
+                              audio_path=extracted_audio)
         save_srt(segments, srt_cache)
         save_word_timestamps(segments, words_cache)
         word_segments = segments  # 방금 추출했으므로 동일

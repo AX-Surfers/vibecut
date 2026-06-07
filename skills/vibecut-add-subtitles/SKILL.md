@@ -1,10 +1,11 @@
 ---
 name: vibecut-add-subtitles
-version: 0.1.0
+version: 0.2.0
 description: |
   영상에 한국어 자막을 자동으로 추가합니다. Whisper 전사 → 누적 사전으로 1차 교정 →
   subtitle-verifier 에이전트로 검증 → 단어 단위 싱크 + 18자 분리 + 검은 외곽선으로
   CapCut 프로젝트에 적용합니다.
+  auto-edit(무음 제거) 이후 실행 시 편집된 타임라인 기준으로 오디오를 추출해 자막을 생성합니다.
   트리거: "자막 추가", "자막 올려", "자막 만들어", "subtitle add", "/vibecut-add-subtitles"
 metadata:
   category: video
@@ -23,6 +24,8 @@ allowed-tools:
 **영상 → 한국어 자막 자동 생성 → CapCut 프로젝트 적용** 의 완전 자동 파이프라인.
 
 ## 핵심 처리 흐름
+
+### 모드 A: 원본 영상 기준 (기본)
 
 ```
 영상 (.mov/.mp4)
@@ -43,6 +46,28 @@ allowed-tools:
               ↓ 편집 가능한 상태로 결과 제공
 ```
 
+### 모드 B: 편집 타임라인 기준 (auto-edit 이후)
+
+`final_segments.json` 또는 `speech_segments.json`이 있거나 `--segments`로 명시할 때 자동 활성화.
+
+```
+영상 + speech_segments.json (auto-edit 결과)
+   │
+   ├─ [0] ffmpeg로 각 발화 구간만 오디오 추출 → 연결
+   │        ↓ <video>_edited_audio.wav
+   │        (연결된 오디오 타임스탬프 = CapCut 편집 타임라인 타임스탬프)
+   │
+   ├─ [1] Whisper 전사 (_edited_audio.wav 기준)
+   │        ↓ <video>_edited.srt + <video>_edited_words.json
+   │
+   ├─ [2~4] 사전 교정 → 검증 → 싱크 (동일)
+   │
+   └─ [5] CapCut JSON 적용
+              ↓ 자막이 편집된 타임라인과 정확히 맞아떨어짐
+```
+
+**핵심 원리:** 발화 구간을 붙여서 만든 오디오의 시간 = CapCut이 세그먼트를 이어붙인 타임라인의 시간. 별도의 시간 변환 없이 Whisper 타임스탬프가 그대로 CapCut 자막 위치가 됨.
+
 ## 전제 조건
 
 ```bash
@@ -60,12 +85,21 @@ which uv || curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## 실행 흐름
 
-### 단계 1: 입력 확인
+### 단계 1: 입력 확인 + 편집 타임라인 감지
 
 ```bash
 # 영상 파일 인자 확인. 없으면 사용자에게 물어보거나 현재 디렉토리 탐색
 find . -maxdepth 2 -type f \( -name "*.mov" -o -name "*.mp4" \) | head -5
+
+# auto-edit 결과 segments 파일 자동 탐색
+SEGMENTS_FILE=""
+for f in final_segments.json speech_segments.json /tmp/final_segments.json /tmp/speech_segments.json; do
+  [ -f "$f" ] && SEGMENTS_FILE="$f" && break
+done
+# SEGMENTS_FILE이 있으면 --segments 플래그로 전달 (모드 B 자동 활성화)
 ```
+
+**판단 기준:** `final_segments.json` 우선, 없으면 `speech_segments.json`. 둘 다 없으면 원본 영상 기준(모드 A)으로 진행.
 
 ### 단계 2: Whisper 모델 선택 (Human-in-the-Loop)
 
@@ -94,11 +128,21 @@ AskUserQuestion(questions=[{
 ### 단계 3: Whisper 전사 (단어 타임스탬프 필수)
 
 ```bash
-SCRIPTS="${CLAUDE_PLUGIN_ROOT}/scripts"
+SCRIPTS="/Users/seungryk/youtube/vibecut/scripts"
+
+# 모드 A: 원본 영상 기준
 uv run "${SCRIPTS}/add_subtitles.py" "${VIDEO}" \
   --model "${WHISPER_MODEL}" \
   --no-verify
 # → <video>.srt, <video>_words.json 생성
+
+# 모드 B: 편집 타임라인 기준 (SEGMENTS_FILE이 있을 때)
+uv run "${SCRIPTS}/add_subtitles.py" "${VIDEO}" \
+  --model "${WHISPER_MODEL}" \
+  --segments "${SEGMENTS_FILE}" \
+  --no-verify
+# → <video>_edited_audio.wav 추출 후 전사
+# → <video>_edited.srt, <video>_edited_words.json 생성
 ```
 
 **왜 단어 타임스탬프가 필요한가:** 시간 균등 분할 시 빠른 발화 / 느린 발화에서 싱크가 어긋남. 단어별 시작·끝 시간을 알아야 정확한 분리가 가능.
@@ -157,19 +201,27 @@ uv run "${SCRIPTS}/add_subtitles.py" "${VIDEO}" \
 
 | 사용자 발화 | 스킬 동작 |
 |------------|----------|
-| "자막 추가해줘" | 영상 파일 선택 → 모델 선택 → 전체 파이프라인 |
+| "자막 추가해줘" | segments 파일 탐색 → 있으면 모드 B, 없으면 모드 A |
+| "편집된 타임라인으로 자막 만들어" | `final_segments.json` 자동 탐색 → 모드 B |
 | "before.mov에 자막 올려" | 1단계 생략, 바로 2~6단계 |
-| "이 영상 자막 만들어" | 현재 디렉토리에서 영상 탐색 |
 | "검증 없이 자막만 빨리" | `--no-verify` 플래그 + 4단계 생략 |
 
 ## 캐시 활용 (재실행 시)
 
+### 모드 A (원본 기준)
 | 파일 존재 | 동작 |
 |----------|------|
 | `<video>_verified.srt` | Whisper + 검증 모두 생략, 바로 적용 |
 | `<video>.srt` + `<video>_words.json` | Whisper 생략, 검증부터 |
 | `<video>.srt`만 | Whisper 생략, 검증부터 (균등 분할로 폴백) |
 | 없음 | 전체 파이프라인 |
+
+### 모드 B (편집 타임라인 기준)
+| 파일 존재 | 동작 |
+|----------|------|
+| `<video>_edited_verified.srt` | 오디오 추출 + Whisper + 검증 모두 생략 |
+| `<video>_edited.srt` + `<video>_edited_words.json` | 오디오 추출 + Whisper 생략, 검증부터 |
+| 없음 | 오디오 추출 → Whisper → 검증 전체 |
 
 ## 환경 변수 (선택)
 

@@ -227,6 +227,8 @@ def build_segments(final_segs: list, orig_video: dict, orig_segment: dict):
         dur_frame   = end_frame - start_frame
         if dur_frame <= 0:
             continue  # 0프레임 구간 건너뜀
+        if dur_frame < 13:
+            continue  # CapCut 최소 클립 길이 미만 건너뜀 (~0.43초)
 
         # µs 변환: 프레임 번호 → 정수 µs
         start_us        = frame_to_us(start_frame)
