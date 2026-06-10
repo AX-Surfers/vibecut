@@ -171,12 +171,15 @@ SRT 형식:
 @subtitle-verifier before.srt 파일을 검증해줘
 ```
 
-또는 `add_subtitles.py`에서 자동 호출:
+또는 `vibecut-add-subtitles` 스킬이 자동 호출:
 
 ```python
-# scripts/add_subtitles.py에서 Task 도구로 subtitle-verifier 호출
-# (다만 현재는 Python 스크립트에서 직접 에이전트를 호출할 수 없으므로,
-#  사용자가 add_subtitles.py 실행 후 별도로 자막 검증을 요청하는 흐름 권장)
+# 스킬 파이프라인 단계 4에서 Task 도구로 자동 호출됨
+Task(
+    description="자막 한국어 오타 검증",
+    subagent_type="subtitle-verifier",
+    prompt="<video>.srt 파일을 검증하고 <video>_verified.srt로 저장해줘. ..."
+)
 ```
 
 ## 주의사항

@@ -1386,6 +1386,9 @@ def main():
                         help="auto-edit 결과 segments JSON 경로 (지정 시 편집 타임라인 기준 오디오 추출 후 전사)")
     parser.add_argument("--splits",        default=None,
                         help="subtitle-splitter 분할 결과 JSON 경로 (기본: 없음, 있으면 AI 분할 사용)")
+    parser.add_argument("--dump-only",     action="store_true",
+                        help="subtitle_input.json 덤프까지만 실행하고 종료 (프로젝트 생성 안 함). "
+                             "검증된 SRT 기준으로 splitter 입력을 재덤프할 때 사용.")
     args = parser.parse_args()
 
     video_path   = Path(args.video).resolve()
@@ -1394,7 +1397,7 @@ def main():
     if not video_path.exists():
         print(f"오류: 파일 없음 — {video_path}", file=sys.stderr)
         sys.exit(1)
-    if not TEMPLATE_DIR.exists():
+    if not TEMPLATE_DIR.exists() and not args.dump_only:
         # 템플릿이 없어도 기존 CapCut 프로젝트가 있으면 그대로 자막 주입 가능
         # (서울한강체 B 기본 스타일 사용)
         project_name = args.project_name or video_path.stem
@@ -1475,7 +1478,12 @@ def main():
         print("  → 검증 없이 진행합니다 (--no-verify 또는 검증된 SRT가 있으면 이 메시지 생략)")
 
     # subtitle_input.json 덤프 (subtitle-splitter 서브에이전트용)
+    # --srt(검증본) 지정 시 검증된 텍스트 + 단어 타임스탬프 기준으로 덤프됨
     dump_subtitle_input(segments)
+
+    if args.dump_only:
+        print("\n✓ --dump-only: subtitle_input.json 덤프 완료 (프로젝트 생성 생략)")
+        return
 
     # --splits: AI 분할 결과 로드
     splits_data: list[list[str]] | None = None
