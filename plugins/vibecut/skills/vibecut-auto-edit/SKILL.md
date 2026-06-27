@@ -1,10 +1,9 @@
 ---
 name: vibecut-auto-edit
-version: 0.3.0
+version: 0.4.0
 description: |
-  Whisper 전사 기반으로 무음·NG 구간을 함께 감지·제거해 CapCut 프로젝트에 적용합니다.
-  Whisper 문장 세그먼트를 클립 단위로 사용하므로 무음은 자동 제거, 문장 중간 잘림 없음.
-  NG 감지(키워드/반복구절/급정지)도 동일한 전사 결과에서 추출합니다.
+  Whisper 전사 → Claude가 transcript 직접 분석 → NG 구간 제거 → CapCut 적용.
+  Jaccard/키워드 방식 대신 Claude가 텍스트를 읽고 반복·실수·불완전 발화를 직접 판단.
   (자막 추가는 vibecut-add-subtitles 스킬을 사용)
   트리거: "무음 제거", "컷편집", "캡컷 편집", "NG 제거", "/vibecut-auto-edit"
 metadata:
@@ -14,42 +13,37 @@ allowed-tools:
   - Bash
   - Read
   - Write
-  - Edit
   - AskUserQuestion
 ---
 
 # vibecut-auto-edit 스킬
 
-**영상 → Whisper 전사 → NG 감지 → 클립 구간 생성 → CapCut 적용** 의 파이프라인.
-
-자막 추가가 필요하면 **`vibecut-add-subtitles`** 스킬을 사용하세요.
+**영상 → Whisper 전사 → Claude transcript 분석 → NG 제거 → CapCut 적용** 파이프라인.
 
 ## 핵심 원리
 
-Whisper가 전사한 **문장 세그먼트 = 남길 구간**입니다.
+Whisper가 전사한 단어 타임스탬프를 **Claude가 직접 읽고** NG 구간을 판단합니다.
 
-- 문장 사이의 침묵·무음은 세그먼트에 포함되지 않으므로 **자동 제거**됩니다
-- 문장 경계가 클립 경계이므로 **문장 중간 잘림이 원천 차단**됩니다
-- 동일한 전사 결과로 NG 패턴도 함께 감지하므로 **전사를 한 번만 실행**합니다
-
-ffmpeg silencedetect는 더 이상 사용하지 않습니다.
+- **기존 방식의 한계**: Jaccard는 인접 세그먼트 간 유사도만 비교 → 문장 *내부* 반복, 3~4회에 걸친 점진적 반복, 불완전 발화를 못 잡음
+- **새 방식**: Claude가 전체 텍스트 흐름을 읽고 맥락 기반으로 판단 → 놓치는 NG 없음
 
 ## 핵심 처리 흐름
 
 ```
 영상 (.mov/.mp4)
    │
-   ├─ [1] Whisper 전사 (detect_ng.py 내장)
-   │        ↓ {stem}_words.json  ← 무음 제거 + 클립 경계 동시 해결
+   ├─ [0] Whisper 모델 선택 (캐시 없을 때만)
    │
-   ├─ [2] NG 자동 감지 (detect_ng.py)
-   │        ├─ 패턴 A: NG 키워드 ("잠깐", "다시", "아니" 등)
-   │        ├─ 패턴 B: 반복 구절 (Jaccard ≥ 0.45)
-   │        └─ 패턴 C: 짧은 발화 + 긴 침묵 급정지
-   │        ↓ ng_log.json
+   ├─ [1] Whisper 전사
+   │        ↓ {stem}_words.json (단어 타임스탬프 포함)
    │
-   ├─ [3] Whisper 세그먼트 기반 클립 구간 생성 (make_segments.py --words-json)
-   │        ↓ final_segments.json
+   ├─ [2] Transcript 생성 + Claude NG 분석
+   │        words.json → [시간] 텍스트 형식으로 변환
+   │        Claude가 직접 읽고 NG 구간 특정
+   │        ↓ /tmp/ng_log.json
+   │
+   ├─ [3] 클립 구간 생성 (make_segments.py)
+   │        ↓ /tmp/final_segments.json
    │
    └─ [4] CapCut JSON 적용 (capcut_editor.py)
               ↓ 4개 파일 동시 갱신 + .locked 삭제
@@ -57,20 +51,11 @@ ffmpeg silencedetect는 더 이상 사용하지 않습니다.
 
 ## 전제 조건
 
-**CapCut이 실행 중이면 반드시 먼저 종료해야 합니다.** 실행 중에 draft_info.json을 수정해도 CapCut이 덮어씁니다.
-
 ```bash
-# CapCut 실행 여부 확인 후 강제 종료
 if pgrep -i "CapCut" > /dev/null 2>&1; then
   echo "⚠ CapCut 실행 중 — 강제 종료합니다..."
-  pkill -i "CapCut"
-  sleep 2
-  echo "✅ CapCut 종료 완료"
-else
-  echo "✅ CapCut 종료 상태 확인"
+  pkill -i "CapCut" && sleep 2
 fi
-
-# uv (Python 의존성 자동 관리)
 which uv || curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
@@ -78,34 +63,34 @@ which uv || curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ### 단계 0: Whisper 모델 선택
 
-**`{stem}_words.json` 캐시가 없을 때만** 사용자에게 모델을 묻습니다. 캐시가 있으면 전사를 생략하므로 이 단계를 건너뜁니다.
+`{stem}_words.json` 캐시가 **없을 때만** 묻습니다.
 
 ```python
 AskUserQuestion(questions=[{
-    "question": "Whisper 모델을 선택해주세요. NG 감지는 STT 정확도에 직접 영향을 받습니다.",
+    "question": "Whisper 모델을 선택해주세요.",
     "header": "Whisper 모델",
     "multiSelect": False,
     "options": [
         {"label": "small (Recommended)",
-         "description": "5분 영상 기준 ~2분. 한국어 정확도가 높아 NG 키워드·반복 구절 감지에 권장."},
+         "description": "5분 영상 ~2분. 한국어 정확도 높음. 대부분 권장."},
         {"label": "tiny",
-         "description": "~30초. 가장 빠르지만 한국어 오인식 가능. NG 감지 정확도가 낮을 수 있음."},
+         "description": "~30초. 빠르지만 오인식 多. NG 분석 정확도 낮음."},
         {"label": "base",
-         "description": "~1분. tiny보다 정확하고 small보다 빠름."},
+         "description": "~1분. tiny보다 정확, small보다 빠름."},
         {"label": "medium",
-         "description": "~10분. 매우 정확. 중요한 영상이나 발화가 불명확한 경우."},
+         "description": "~10분. 전문 용어·불명확한 발음에 권장."},
         {"label": "large-v3",
-         "description": "~30분+. 최고 정확도. 긴 영상·전문 용어가 많은 경우."},
+         "description": "~30분+. 최고 정확도."},
     ]
 }])
 ```
 
-### 단계 1: Whisper 전사 + NG 감지
+### 단계 1: Whisper 전사
 
-전사와 NG 감지를 한 번에 실행합니다. `{stem}_words.json`이 이미 있으면 전사를 생략하고 NG 감지만 수행합니다.
+`{stem}_words.json` 캐시가 있으면 이 단계를 **건너뜁니다**.
 
 ```bash
-# scripts 경로 결정: config 우선, 없으면 플러그인 캐시 자동 탐색
+# scripts 경로 결정
 VIBECUT_CONFIG="${HOME}/.vibecut/config.json"
 SCRIPTS=""
 if [ -f "${VIBECUT_CONFIG}" ]; then
@@ -118,40 +103,97 @@ if [ -z "${SCRIPTS}" ]; then
   echo "❌ vibecut 스크립트를 찾을 수 없습니다. '/vibecut-setup'을 먼저 실행해주세요."
   exit 1
 fi
+
 VIDEO="<영상 파일 경로>"
-
-uv run "${SCRIPTS}/detect_ng.py" "${VIDEO}" \
-  --model "${WHISPER_MODEL}" \
-  --out /tmp/ng_log.json
-```
-
-**감지 패턴 3가지:**
-
-| 패턴 | 방식 | 예시 |
-|------|------|------|
-| A: 키워드 NG | 세그먼트 텍스트에 NG 키워드 포함 시 해당 구간 제거 | "잠깐", "다시", "아니", "죄송", "NG", "컷" 등 |
-| B: 반복 구절 | 인접 세그먼트 Jaccard ≥ 0.45 → 앞 세그먼트 NG | "안녕하세요 저는" → "안녕하세요 저는 오늘" |
-| C: 급정지 | 발화 < 3초 + 단어 < 4개 + 이후 침묵 > 1.5초 | 말하다 갑자기 멈추고 재시작 |
-
-### 단계 2: 클립 구간 생성
-
-Whisper 문장 세그먼트를 클립 단위로 사용해 최종 구간을 생성합니다.
-
-```bash
 WORDS_JSON="${VIDEO%.*}_words.json"
 
+# 전사 실행 (ng 감지 결과는 무시, words.json만 사용)
+uv run "${SCRIPTS}/detect_ng.py" "${VIDEO}" \
+  --model "${WHISPER_MODEL}" \
+  --out /tmp/_ng_unused.json
+```
+
+### 단계 2: Transcript 생성 + Claude NG 분석
+
+#### 2-A: 읽기 쉬운 transcript 생성
+
+```bash
+python3 - <<'PYEOF'
+import json, sys
+
+words_path = "${WORDS_JSON}"
+segs = json.loads(open(words_path).read())
+
+lines = []
+for seg in segs:
+    t = seg["start"]
+    m, s = divmod(int(t), 60)
+    lines.append(f"[{m:02d}:{s:02d} ({t:.1f}s)] {seg['text'].strip()}")
+
+transcript = "\n".join(lines)
+open("/tmp/transcript.txt", "w").write(transcript)
+print(f"세그먼트: {len(segs)}개")
+print(transcript[:3000])  # 처음 3000자 미리보기
+PYEOF
+```
+
+#### 2-B: Claude가 transcript 전체를 읽고 NG 판단
+
+`/tmp/transcript.txt`를 **전체 읽은 후** 아래 기준으로 NG 구간을 판단합니다.
+
+**NG 판단 기준:**
+
+| 패턴 | 예시 | 판단 방법 |
+|------|------|----------|
+| 문장 내 자기 반복 | "최근에 엄청난 최근에 엄청난" | 동일 어절이 한 세그먼트 안에서 반복 |
+| 복수 시도 | 같은 내용을 2~4회 다르게 말함 | 연속 세그먼트에서 유사 내용 반복 |
+| 명시적 NG 신호 | "잠깐", "다시", "아니", "죄송" | 해당 세그먼트 + 직전 세그먼트까지 포함 |
+| 불완전 발화 | 문장이 중간에 끊기고 재시작 | 짧고 의미 없는 단편 발화 |
+| 급정지 후 재시작 | 말하다 갑자기 멈추고 다시 시작 | 직전 세그먼트가 짧고 이후 유사 내용 등장 |
+
+**NG 구간 확장 규칙:**
+- NG 신호어("다시", "잠깐")가 있으면 **신호어 이전** 발화까지 포함 (신호어가 지칭하는 NG 구간)
+- 복수 시도 패턴은 **마지막 시도만 남기고** 나머지 모두 NG
+- 불완전 발화는 **그 세그먼트 전체**를 NG
+
+#### 2-C: ng_log.json 작성
+
+분석 후 아래 형식으로 저장합니다.
+
+```python
+import json
+
+ng_spans = [
+    # [시작_초, 끝_초] — words.json의 start/end 값 기준
+    # 예: [17.0, 65.2],  # "최근에 엄청난 최근에..." 반복 구간
+    # 예: [180.6, 197.5], # "브라우저 AI" 3번 시도 구간
+]
+
+json.dump({"ng_spans": ng_spans}, open("/tmp/ng_log.json", "w"),
+          ensure_ascii=False, indent=2)
+print(f"NG 구간: {len(ng_spans)}개, 총 {sum(e-s for s,e in ng_spans):.1f}초")
+```
+
+분석 결과를 요약해서 보고합니다:
+```
+NG 분석 완료:
+  - 문장 내 반복: N개
+  - 복수 시도:   N개
+  - 명시적 신호: N개
+  - 불완전 발화: N개
+  총 NG: N개 구간 / XX초
+```
+
+### 단계 3: 클립 구간 생성
+
+```bash
 uv run "${SCRIPTS}/make_segments.py" \
   --words-json "${WORDS_JSON}" \
   --ng /tmp/ng_log.json \
   --out /tmp/final_segments.json
 ```
 
-`final_segments.json` 형식: `[[start_sec, end_sec], ...]`
-
-- 문장 사이 침묵은 세그먼트에 없으므로 자동 제거
-- NG 구간은 세그먼트의 50% 이상 겹치면 제거
-
-### 단계 3: CapCut JSON 적용
+### 단계 4: CapCut JSON 적용
 
 ```bash
 PROJECT="<CapCut 프로젝트 경로>"
@@ -160,40 +202,30 @@ uv run "${SCRIPTS}/capcut_editor.py" /tmp/final_segments.json \
   --project "${PROJECT}"
 ```
 
-스크립트가 자동 처리:
-1. **30fps 프레임 정렬** — 모든 타임스탬프를 프레임 경계에 정렬
-2. **세그먼트마다 고유 materials 7종 생성**
-3. **4개 JSON 파일 동시 저장** — 루트/bak + Timelines/UUID/ 루트/bak
-4. **`.locked` 파일 자동 삭제**
+## 캐시 활용
+
+| 파일 존재 | 동작 |
+|----------|------|
+| `{stem}_words.json` | 전사 생략 → 모델 질문 없이 바로 분석 |
+| `/tmp/ng_log.json` | NG 분석 생략 → 구간 생성부터 |
+| `/tmp/final_segments.json` | CapCut 적용만 |
 
 ## 사용자 호출 예시
 
 | 사용자 발화 | 동작 |
 |------------|------|
-| "컷편집해줘" | 모델 선택 → Whisper 전사 → NG 감지 → 전체 파이프라인 |
-| "NG도 같이 제거해줘" | 동일 (기본 포함) |
-| "NG 감지만 다시 해줘" | `detect_ng.py`만 재실행 (words.json 캐시 재사용, 모델 질문 생략) |
-| "구간 생성만 다시 해줘" | `make_segments.py`만 재실행 |
-
-## 캐시 활용
-
-| 파일 존재 | 동작 |
-|----------|------|
-| `{stem}_words.json` | Whisper 전사 생략 → NG 패턴 분석만 실행 |
-| `/tmp/ng_log.json` | NG 감지 생략 → `make_segments.py` → `capcut_editor.py`만 실행 |
-| `/tmp/final_segments.json` | 구간 생성 생략 → `capcut_editor.py`만 실행 |
+| "컷편집해줘" | 전체 파이프라인 |
+| "NG만 다시 분석해줘" | words.json 재사용 → transcript 재분석 → ng_log.json 재작성 |
+| "구간 생성만 다시 해줘" | make_segments.py만 재실행 |
 
 ## 자막도 함께 추가하려면
 
-이 스킬은 **무음 + NG 제거**만 담당합니다. 자막을 추가하려면:
-
-1. 먼저 이 스킬로 컷편집
-2. 그 다음 `vibecut-add-subtitles` 스킬 호출
-3. → `{stem}_words.json`이 있으면 전사 생략, `final_segments.json`이 있으면 편집 타임라인 기준으로 자막 자동 생성
+1. 이 스킬로 컷편집 완료
+2. `vibecut-add-subtitles` 스킬 호출
+3. `{stem}_words.json`·`final_segments.json` 캐시 자동 재사용
 
 ## 주의사항
 
-- **CapCut 종료 필수** — 실행 중에 파일을 수정해도 CapCut이 재실행 시 덮어씀
-- **NG 키워드 오탐** — "다시"가 정상 발화에 포함될 수 있음. 결과 확인 후 `--jaccard` 조정
-- **모델 선택 기준** — NG 감지는 STT 텍스트 기반이므로 small 이상 권장. tiny는 빠르지만 한국어 오인식으로 패턴 A·B 감지율이 낮을 수 있음
-- **긴 영상** — 30분 영상 기준: tiny ~1분, small ~3분, medium ~15분 소요
+- **CapCut 종료 필수**
+- **NG 경계 조정** — Claude가 판단한 NG 구간이 너무 넓거나 좁으면 "NG 다시 분석해줘 + 피드백" 으로 재실행
+- **긴 영상** — transcript 전체를 읽어야 하므로 영상이 30분 이상이면 분할 분석 권장
