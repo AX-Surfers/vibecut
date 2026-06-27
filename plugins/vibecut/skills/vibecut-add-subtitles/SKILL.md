@@ -142,7 +142,19 @@ AskUserQuestion(questions=[{
 ### 단계 3: Whisper 전사 (단어 타임스탬프 필수)
 
 ```bash
-SCRIPTS="/Users/seungryk/youtube/vibecut/scripts"
+# scripts 경로 결정: config 우선, 없으면 플러그인 캐시 자동 탐색
+VIBECUT_CONFIG="${HOME}/.vibecut/config.json"
+SCRIPTS=""
+if [ -f "${VIBECUT_CONFIG}" ]; then
+  SCRIPTS=$(python3 -c "import json; print(json.load(open('${VIBECUT_CONFIG}')).get('scripts_dir',''))" 2>/dev/null)
+fi
+if [ -z "${SCRIPTS}" ]; then
+  SCRIPTS=$(find "${HOME}/.claude/plugins/cache/vibecut" -name "capcut_editor.py" -maxdepth 8 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+fi
+if [ -z "${SCRIPTS}" ]; then
+  echo "❌ vibecut 스크립트를 찾을 수 없습니다. '/vibecut-setup'을 먼저 실행해주세요."
+  exit 1
+fi
 
 # 모드 A: 원본 영상 기준
 uv run "${SCRIPTS}/add_subtitles.py" "${VIDEO}" \

@@ -81,7 +81,19 @@ which uv || curl -LsSf https://astral.sh/uv/install.sh | sh
 전사와 NG 감지를 한 번에 실행합니다. `{stem}_words.json`이 이미 있으면 전사를 생략하고 NG 감지만 수행합니다.
 
 ```bash
-SCRIPTS="/Users/seungryk/youtube/vibecut/scripts"
+# scripts 경로 결정: config 우선, 없으면 플러그인 캐시 자동 탐색
+VIBECUT_CONFIG="${HOME}/.vibecut/config.json"
+SCRIPTS=""
+if [ -f "${VIBECUT_CONFIG}" ]; then
+  SCRIPTS=$(python3 -c "import json; print(json.load(open('${VIBECUT_CONFIG}')).get('scripts_dir',''))" 2>/dev/null)
+fi
+if [ -z "${SCRIPTS}" ]; then
+  SCRIPTS=$(find "${HOME}/.claude/plugins/cache/vibecut" -name "capcut_editor.py" -maxdepth 8 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+fi
+if [ -z "${SCRIPTS}" ]; then
+  echo "❌ vibecut 스크립트를 찾을 수 없습니다. '/vibecut-setup'을 먼저 실행해주세요."
+  exit 1
+fi
 VIDEO="<영상 파일 경로>"
 
 uv run "${SCRIPTS}/detect_ng.py" "${VIDEO}" \

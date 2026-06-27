@@ -20,6 +20,7 @@
     "vibecut"
   ],
   "skills": [
+    "./skills/vibecut-setup/",
     "./skills/vibecut-auto-edit/",
     "./skills/vibecut-add-subtitles/",
     "./skills/vibecut-youtube-description/"
