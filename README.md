@@ -27,15 +27,30 @@
 
 ## 설치 — Claude Code
 
+### 방법 A: 원클릭 설치 (권장)
+
+터미널에서 한 줄로 설치됩니다. uv가 없으면 자동으로 함께 설치합니다.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AX-Surfers/Vibecut/main/install.sh | bash
+```
+
+설치 후 Claude Code 인터랙티브 터미널(`claude` 명령)에서 플러그인을 활성화하세요:
+
+```
+/plugin install vibecut@Vibecut
+```
+
+### 방법 B: Claude Code 플러그인 명령어 (인터랙티브 터미널 전용)
+
+`claude` CLI를 직접 실행했을 때만 동작합니다. Claude Code 앱(데스크탑/웹)에서는 동작하지 않습니다.
+
 ```bash
 # 1. 마켓플레이스 추가
 /plugin marketplace add AX-Surfers/Vibecut
 
 # 2. Vibecut 설치
-/plugin install vibecut@vibecut
-
-# 3. (선택) Python 의존성 — uv가 자동 처리하지만, uv가 없으면 설치
-curl -LsSf https://astral.sh/uv/install.sh | sh
+/plugin install vibecut@Vibecut
 ```
 
 설치 후 자연어로 호출:
