@@ -71,13 +71,15 @@ def frame_to_us(frame: int) -> int:
     return result
 
 
-def find_timeline_uuid(project_dir: Path) -> str:
-    """Timelines/ 하위 첫 번째 UUID 디렉토리 반환"""
+def find_timeline_uuid(project_dir: Path) -> str | None:
+    """Timelines/ 하위 첫 번째 UUID 디렉토리 반환. 없으면 None."""
     timelines_dir = project_dir / "Timelines"
+    if not timelines_dir.exists():
+        return None
     for entry in timelines_dir.iterdir():
         if entry.is_dir() and "-" in entry.name:
             return entry.name
-    raise FileNotFoundError(f"Timelines UUID 디렉토리를 찾을 수 없음: {timelines_dir}")
+    return None
 
 
 def check_capcut_not_running():
@@ -199,15 +201,16 @@ def make_segment(seg_id: str, vid_id: str, extra_refs: list, source_start_us: in
 # 핵심: 세그먼트 + materials 빌드
 # ────────────────────────────────────────────────
 
-def build_segments(final_segs: list, orig_video: dict, orig_segment: dict):
+def build_segments(final_segs: list, orig_video: dict, orig_segment: dict,
+                   timeline_offset_frame: int = 0):
     """
     final_segs: [[start_sec, end_sec], ...] 원본 영상 기준
-    orig_video:   draft['materials']['videos'][0]
-    orig_segment: draft['tracks'][0]['segments'][0]
+    orig_video:   draft['materials']['videos'][N]
+    orig_segment: draft['tracks'][0]['segments'][N]
+    timeline_offset_frame: 타임라인 시작 오프셋 (프레임 단위, 다중 영상 순차 배치 시 사용)
 
-    반환: (segments_list, materials_dict)
+    반환: (segments_list, materials_dict, end_frame)
     """
-    US = 1_000_000
     segments = []
     mat_videos = []
     mat_speeds = []
@@ -219,7 +222,7 @@ def build_segments(final_segs: list, orig_video: dict, orig_segment: dict):
 
     # timeline_frame을 정수 프레임 단위로 누적
     # (µs로 누적하면 ±1µs 오차가 쌓여 target_timerange.start가 프레임 경계를 벗어남)
-    timeline_frame = 0
+    timeline_frame = timeline_offset_frame
     for start, end in final_segs:
         # 30fps 프레임 번호로 변환 (정수)
         start_frame = round(start * FPS)
@@ -260,7 +263,6 @@ def build_segments(final_segs: list, orig_video: dict, orig_segment: dict):
         ))
         timeline_frame += dur_frame  # 프레임 단위 누적 (µs 오차 없음)
 
-    total_duration_us = frame_to_us(timeline_frame)
     materials = {
         "videos": mat_videos,
         "speeds": mat_speeds,
@@ -270,7 +272,7 @@ def build_segments(final_segs: list, orig_video: dict, orig_segment: dict):
         "material_colors": mat_colors,
         "vocal_separations": mat_vocals,
     }
-    return segments, materials, total_duration_us
+    return segments, materials, timeline_frame
 
 
 # ────────────────────────────────────────────────
@@ -295,8 +297,8 @@ def update_draft(draft: dict, new_segments: list, new_materials: dict,
     return d
 
 
-def write_4_files(project_dir: Path, timeline_uuid: str, updated_draft: dict):
-    """4개 파일 모두 동일하게 저장 (수정 전 자동 백업)"""
+def write_4_files(project_dir: Path, timeline_uuid: str | None, updated_draft: dict):
+    """4개 파일 모두 동일하게 저장 (수정 전 자동 백업). timeline_uuid가 None이면 루트 2개만 저장."""
     # 덮어쓰기 전 자동 백업
     try:
         from _lib_backup import backup_project_json
@@ -309,9 +311,12 @@ def write_4_files(project_dir: Path, timeline_uuid: str, updated_draft: dict):
     paths = [
         project_dir / "draft_info.json",
         project_dir / "draft_info.json.bak",
-        project_dir / "Timelines" / timeline_uuid / "draft_info.json",
-        project_dir / "Timelines" / timeline_uuid / "draft_info.json.bak",
     ]
+    if timeline_uuid:
+        paths += [
+            project_dir / "Timelines" / timeline_uuid / "draft_info.json",
+            project_dir / "Timelines" / timeline_uuid / "draft_info.json.bak",
+        ]
 
     for p in paths:
         p.write_text(content, encoding="utf-8")
@@ -323,10 +328,11 @@ def write_4_files(project_dir: Path, timeline_uuid: str, updated_draft: dict):
         locked.unlink()
         print(f"  🗑️  {locked} 삭제됨")
 
-    timeline_locked = project_dir / "Timelines" / timeline_uuid / ".locked"
-    if timeline_locked.exists():
-        timeline_locked.unlink()
-        print(f"  🗑️  {timeline_locked} 삭제됨")
+    if timeline_uuid:
+        timeline_locked = project_dir / "Timelines" / timeline_uuid / ".locked"
+        if timeline_locked.exists():
+            timeline_locked.unlink()
+            print(f"  🗑️  {timeline_locked} 삭제됨")
 
 
 # ────────────────────────────────────────────────
@@ -336,6 +342,11 @@ def write_4_files(project_dir: Path, timeline_uuid: str, updated_draft: dict):
 def main():
     parser = argparse.ArgumentParser(description="CapCut 자동 컷편집")
     parser.add_argument("segments", help="편집 구간 JSON 파일 경로 [[start_sec, end_sec], ...]")
+    parser.add_argument(
+        "--segments2",
+        default=None,
+        help="두 번째 영상 편집 구간 JSON 파일 경로 (프로젝트에 영상이 2개인 경우)"
+    )
     parser.add_argument(
         "--project",
         default=os.path.expanduser(
@@ -362,37 +373,56 @@ def main():
     # Timeline UUID 찾기
     timeline_uuid = find_timeline_uuid(project_dir)
     print(f"📁 프로젝트: {project_dir.name}")
-    print(f"🆔 Timeline UUID: {timeline_uuid}")
+    if timeline_uuid:
+        print(f"🆔 Timeline UUID: {timeline_uuid}")
+        draft_path = project_dir / "Timelines" / timeline_uuid / "draft_info.json"
+    else:
+        print("📂 구형 포맷 (Timelines 없음) — 루트 draft_info.json 사용")
+        draft_path = project_dir / "draft_info.json"
 
-    # 원본 draft 로드 (Timelines 파일 기준)
-    timeline_draft_path = project_dir / "Timelines" / timeline_uuid / "draft_info.json"
-    with open(timeline_draft_path, encoding="utf-8") as f:
+    with open(draft_path, encoding="utf-8") as f:
         draft = json.load(f)
 
-    orig_video = draft["materials"]["videos"][0]
-    orig_segment = draft["tracks"][0]["segments"][0]
-    print(f"🎬 원본 영상: {orig_video['path']}")
-    print(f"⏱️  원본 길이: {orig_video['duration'] / 1_000_000 / 60:.1f}분")
+    videos = draft["materials"]["videos"]
+    orig_segments_list = draft["tracks"][0]["segments"]
 
-    # 편집 구간 로드
-    with open(args.segments, encoding="utf-8") as f:
-        final_segs = json.load(f)
-    print(f"\n✂️  편집 구간: {len(final_segs)}개")
-    total_sec = sum(e - s for s, e in final_segs)
-    print(f"📊 편집 후 길이: {total_sec / 60:.1f}분 ({total_sec:.0f}초)")
-    orig_min = orig_video["duration"] / 1_000_000 / 60
-    print(f"📉 단축률: {(1 - total_sec/60/orig_min)*100:.0f}% 감소")
+    # 편집 구간 파일 목록 결정
+    seg_files = [args.segments]
+    if args.segments2:
+        seg_files.append(args.segments2)
 
-    # 세그먼트 + materials 빌드
-    print("\n🔨 세그먼트 생성 중...")
-    new_segments, new_materials, total_us = build_segments(
-        final_segs, orig_video, orig_segment
-    )
-    print(f"  세그먼트: {len(new_segments)}개")
-    print(f"  videos:   {len(new_materials['videos'])}개")
+    num = min(len(seg_files), len(videos), len(orig_segments_list))
+
+    all_segs = []
+    all_mats = {k: [] for k in ["videos", "speeds", "placeholder_infos", "canvases",
+                                 "sound_channel_mappings", "material_colors", "vocal_separations"]}
+    timeline_frame = 0
+
+    for i in range(num):
+        orig_video = videos[i]
+        orig_segment = orig_segments_list[i]
+        with open(seg_files[i], encoding="utf-8") as f:
+            final_segs = json.load(f)
+
+        total_sec = sum(e - s for s, e in final_segs)
+        orig_min = orig_video["duration"] / 1_000_000 / 60
+        print(f"\n🎬 영상 {i+1}: {orig_video['path'].split('/')[-1]}")
+        print(f"   원본 {orig_min:.1f}분 → 편집 후 {total_sec/60:.1f}분 "
+              f"({(1 - total_sec/60/orig_min)*100:.0f}% 감소, {len(final_segs)}개 클립)")
+
+        new_segs, new_mats, timeline_frame = build_segments(
+            final_segs, orig_video, orig_segment,
+            timeline_offset_frame=timeline_frame
+        )
+        all_segs.extend(new_segs)
+        for k in all_mats:
+            all_mats[k].extend(new_mats.get(k, []))
+
+    total_us = frame_to_us(timeline_frame)
+    print(f"\n🔨 총 {len(all_segs)}개 세그먼트, 전체 {total_us/1e6/60:.1f}분")
 
     # draft 업데이트
-    updated = update_draft(draft, new_segments, new_materials, total_us)
+    updated = update_draft(draft, all_segs, all_mats, total_us)
 
     # 4개 파일 저장
     print("\n💾 파일 저장 중...")
