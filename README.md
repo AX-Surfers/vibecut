@@ -119,15 +119,16 @@ uv run scripts/add_subtitles.py ~/Movies/test.mov --model small
 
 ```
 Vibecut/
-├── .claude-plugin/
-│   ├── plugin.json              ← Claude Code 플러그인 매니페스트
-│   └── marketplace.json         ← Claude Code 마켓플레이스 매니페스트
-├── agents/                      ← Claude Code 서브에이전트
-│   ├── capcut/AGENT.md
-│   └── subtitle-verifier/AGENT.md
-├── skills/                      ← Claude Code 스킬 (목적별 분리)
-│   ├── vibecut-add-subtitles/SKILL.md  ← 자막 자동 생성·검증·적용
-│   └── vibecut-auto-edit/SKILL.md      ← 무음 제거 컷편집
+├── plugins/vibecut/             ← Claude Code 플러그인 (공식 구조)
+│   ├── .claude-plugin/
+│   │   ├── plugin.json          ← Claude Code 플러그인 매니페스트
+│   │   └── marketplace.json     ← Claude Code 마켓플레이스 매니페스트
+│   ├── agents/                  ← Claude Code 서브에이전트
+│   │   ├── capcut/AGENT.md
+│   │   └── subtitle-verifier/AGENT.md
+│   └── skills/                  ← Claude Code 스킬 (목적별 분리)
+│       ├── vibecut-add-subtitles/SKILL.md  ← 자막 자동 생성·검증·적용
+│       └── vibecut-auto-edit/SKILL.md      ← 무음 제거 컷편집
 ├── scripts/                     ← uv-ready Python 스크립트
 │   ├── add_subtitles.py         ← 영상/사진 → Whisper 자막 → CapCut 프로젝트
 │   ├── photo_slideshow.py       ← 사진 폴더 → CapCut 슬라이드쇼 (배경음악/자막 지원)
@@ -184,7 +185,7 @@ CapCut JSON에 페이드 인/아웃을 직접 추가하려면 **`material_animat
 
 > ⚠️ 페이드 인/아웃은 **서로 다른 resource_id**를 가집니다. 같은 ID로 type만 `"in"/"out"` 바꿔 적용하면 CapCut이 둘 다 페이드 아웃으로 렌더링됩니다. (실측 확인)
 
-자세한 코드 예시: [`agents/capcut/AGENT.md`](./agents/capcut/AGENT.md#페이드-인--페이드-아웃-애니메이션-적용)
+자세한 코드 예시: [`agents/capcut/AGENT.md`](./plugins/vibecut/agents/capcut/AGENT.md#페이드-인--페이드-아웃-애니메이션-적용)
 
 ### 1. 사진과 영상의 material 포맷 차이 (중요)
 

@@ -22,7 +22,7 @@ jobs:
           python3 <<'PY'
           import sys, yaml, glob, re
           failed = []
-          for path in sorted(glob.glob("skills/*/SKILL.md")):
+          for path in sorted(glob.glob("plugins/*/skills/*/SKILL.md")):
               with open(path, encoding="utf-8") as f:
                   text = f.read()
               m = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
@@ -37,7 +37,7 @@ jobs:
               for key in ("name", "description"):
                   if key not in fm or not fm[key]:
                       failed.append(f"{path}: missing required field '{key}'")
-          for path in sorted(glob.glob("agents/*/AGENT.md")):
+          for path in sorted(glob.glob("plugins/*/agents/*/AGENT.md")):
               with open(path, encoding="utf-8") as f:
                   text = f.read()
               m = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
@@ -66,26 +66,36 @@ jobs:
       - name: Validate plugin.json required fields
         run: |
           python3 <<'PY'
-          import json, sys
-          with open(".claude-plugin/plugin.json") as f:
-              p = json.load(f)
-          required = ["name", "version", "description"]
-          missing = [k for k in required if k not in p or not p[k]]
-          if missing:
-              print(f"❌ plugin.json missing: {missing}")
+          import json, sys, glob
+          paths = sorted(glob.glob("plugins/*/.claude-plugin/plugin.json"))
+          if not paths:
+              print("❌ No plugin.json found under plugins/*/.claude-plugin/")
               sys.exit(1)
-          print(f"✅ plugin.json valid (name={p['name']}, version={p['version']})")
+          for plugin_path in paths:
+              with open(plugin_path) as f:
+                  p = json.load(f)
+              required = ["name", "version", "description"]
+              missing = [k for k in required if k not in p or not p[k]]
+              if missing:
+                  print(f"❌ {plugin_path} missing: {missing}")
+                  sys.exit(1)
+              print(f"✅ {plugin_path} valid (name={p['name']}, version={p['version']})")
           PY
       - name: Validate marketplace.json
         run: |
           python3 <<'PY'
-          import json, sys
-          with open(".claude-plugin/marketplace.json") as f:
-              m = json.load(f)
-          if "plugins" not in m or not isinstance(m["plugins"], list):
-              print("❌ marketplace.json: 'plugins' array required")
+          import json, sys, glob
+          paths = sorted(glob.glob("plugins/*/.claude-plugin/marketplace.json"))
+          if not paths:
+              print("❌ No marketplace.json found under plugins/*/.claude-plugin/")
               sys.exit(1)
-          print(f"✅ marketplace.json valid ({len(m['plugins'])} plugin(s))")
+          for mpath in paths:
+              with open(mpath) as f:
+                  m = json.load(f)
+              if "plugins" not in m or not isinstance(m["plugins"], list):
+                  print(f"❌ {mpath}: 'plugins' array required")
+                  sys.exit(1)
+              print(f"✅ {mpath} valid ({len(m['plugins'])} plugin(s))")
           PY
 
   corrections-dict:
