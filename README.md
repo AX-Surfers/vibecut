@@ -7,9 +7,10 @@
 
 | 기능 | 스킬 / 명령 한 줄 | 결과 |
 |------|-----------------------|------|
+| **환경 초기화** | `/vibecut-setup` 또는 "vibecut 설정해줘" | uv·ffmpeg 확인, 의존성 설치, 경로 자동 설정 |
+| **무음 컷편집** | `/vibecut-auto-edit` 또는 "무음 제거해줘" | Whisper 전사 → NG 감지 → CapCut JSON 적용 |
 | **자막 자동 생성** | `/vibecut-add-subtitles` 또는 "자막 올려줘" | Whisper 전사 → 한국어 검수 → CapCut 자막 트랙 추가 |
-| **무음 컷편집** | `/vibecut-auto-edit` 또는 "무음 제거해줘" | -35dB 이하 자동 감지 → CapCut JSON 적용 |
-| **사진 슬라이드쇼** | `photo_slideshow.py` | 사진 폴더 + 배경음악 → CapCut 슬라이드쇼 프로젝트 |
+| **유튜브 설명 생성** | `/vibecut-youtube-description` 또는 "유튜브 설명 써줘" | 자막 분석 → 제목 3가지 + 설명 + 챕터 자동 생성 |
 | **자막 검증만** | `@subtitle-verifier <name>.srt 검증해줘` | 한국어 오인식 교정 + `corrections.json` 학습 |
 | **CapCut JSON 직접 수정** | `@capcut ...` 자연어 | 4개 파일 동시 갱신, .locked 자동 삭제, 30fps 정렬 |
 
@@ -27,35 +28,23 @@
 
 ## 설치 — Claude Code
 
-### 방법 A: 원클릭 설치 (권장)
-
-터미널에서 한 줄로 설치됩니다. uv가 없으면 자동으로 함께 설치합니다.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/AX-Surfers/Vibecut/main/install.sh | bash
-```
-
-설치 후 Claude Code 인터랙티브 터미널(`claude` 명령)에서 플러그인을 활성화하세요:
+Claude Code 인터랙티브 터미널(`claude` 명령)에서 세 줄로 완료됩니다.
 
 ```
-/plugin install vibecut@Vibecut
+/plugin marketplace add AX-Surfers/vibecut
+/plugin install vibecut@vibecut
+/vibecut-setup
 ```
 
-### 방법 B: Claude Code 플러그인 명령어 (인터랙티브 터미널 전용)
+- **1번**: 마켓플레이스 등록
+- **2번**: 플러그인 설치 (스킬·에이전트 활성화)
+- **3번**: uv·ffmpeg 확인, Python 의존성 설치, 경로 자동 설정 — **처음 한 번만 실행**
 
-`claude` CLI를 직접 실행했을 때만 동작합니다. Claude Code 앱(데스크탑/웹)에서는 동작하지 않습니다.
-
-```bash
-# 1. 마켓플레이스 추가
-/plugin marketplace add AX-Surfers/Vibecut
-
-# 2. Vibecut 설치
-/plugin install vibecut@Vibecut
+이후 자연어로 바로 호출 가능:
 ```
-
-설치 후 자연어로 호출:
-```
-@capcut before.mov에 자막을 추가해줘
+무음 제거해줘
+자막 올려줘
+유튜브 설명 써줘
 ```
 
 ## 설치 — Codex CLI / 일반 사용
@@ -121,20 +110,24 @@ uv run scripts/add_subtitles.py ~/Movies/test.mov --model small
 Vibecut/
 ├── plugins/vibecut/             ← Claude Code 플러그인 (공식 구조)
 │   ├── .claude-plugin/
-│   │   ├── plugin.json          ← Claude Code 플러그인 매니페스트
+│   │   ├── plugin.json          ← 스킬·에이전트 등록 매니페스트
 │   │   └── marketplace.json     ← Claude Code 마켓플레이스 매니페스트
 │   ├── agents/                  ← Claude Code 서브에이전트
 │   │   ├── capcut/AGENT.md
+│   │   ├── subtitle-splitter/AGENT.md
 │   │   └── subtitle-verifier/AGENT.md
 │   └── skills/                  ← Claude Code 스킬 (목적별 분리)
-│       ├── vibecut-add-subtitles/SKILL.md  ← 자막 자동 생성·검증·적용
-│       └── vibecut-auto-edit/SKILL.md      ← 무음 제거 컷편집
+│       ├── vibecut-setup/SKILL.md             ← 환경 초기화 (처음 한 번)
+│       ├── vibecut-auto-edit/SKILL.md         ← 무음 제거·NG 감지 컷편집
+│       ├── vibecut-add-subtitles/SKILL.md     ← 자막 자동 생성·검증·적용
+│       └── vibecut-youtube-description/SKILL.md ← 유튜브 제목·설명·챕터 생성
 ├── scripts/                     ← uv-ready Python 스크립트
-│   ├── add_subtitles.py         ← 영상/사진 → Whisper 자막 → CapCut 프로젝트
-│   ├── photo_slideshow.py       ← 사진 폴더 → CapCut 슬라이드쇼 (배경음악/자막 지원)
+│   ├── add_subtitles.py         ← 영상 → Whisper 자막 → CapCut 프로젝트
 │   ├── capcut_editor.py         ← CapCut JSON 컷편집 (무음 제거용)
+│   ├── detect_ng.py             ← Whisper 전사 + NG 패턴 감지
 │   ├── make_segments.py         ← 발화 구간 생성
-│   └── _lib_backup.py           ← 자동 백업/복원 유틸 (모든 스크립트가 공유)
+│   ├── photo_slideshow.py       ← 사진 폴더 → CapCut 슬라이드쇼
+│   └── _lib_backup.py           ← 자동 백업/복원 유틸
 ├── data/
 │   └── corrections.json         ← 한국어 오인식 사전 (사용할수록 누적)
 ├── AGENTS.md                    ← Codex CLI / 범용 가이드
