@@ -19,6 +19,5 @@
     "automation",
     "vibecut"
   ],
-  "skills": "./skills/",
-  "agents": "./agents/"
+  "skills": "./skills/"
 }
