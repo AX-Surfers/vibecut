@@ -76,6 +76,30 @@ which uv || curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## 실행 흐름
 
+### 단계 0: Whisper 모델 선택
+
+**`{stem}_words.json` 캐시가 없을 때만** 사용자에게 모델을 묻습니다. 캐시가 있으면 전사를 생략하므로 이 단계를 건너뜁니다.
+
+```python
+AskUserQuestion(questions=[{
+    "question": "Whisper 모델을 선택해주세요. NG 감지는 STT 정확도에 직접 영향을 받습니다.",
+    "header": "Whisper 모델",
+    "multiSelect": False,
+    "options": [
+        {"label": "small (Recommended)",
+         "description": "5분 영상 기준 ~2분. 한국어 정확도가 높아 NG 키워드·반복 구절 감지에 권장."},
+        {"label": "tiny",
+         "description": "~30초. 가장 빠르지만 한국어 오인식 가능. NG 감지 정확도가 낮을 수 있음."},
+        {"label": "base",
+         "description": "~1분. tiny보다 정확하고 small보다 빠름."},
+        {"label": "medium",
+         "description": "~10분. 매우 정확. 중요한 영상이나 발화가 불명확한 경우."},
+        {"label": "large-v3",
+         "description": "~30분+. 최고 정확도. 긴 영상·전문 용어가 많은 경우."},
+    ]
+}])
+```
+
 ### 단계 1: Whisper 전사 + NG 감지
 
 전사와 NG 감지를 한 번에 실행합니다. `{stem}_words.json`이 이미 있으면 전사를 생략하고 NG 감지만 수행합니다.
@@ -97,6 +121,7 @@ fi
 VIDEO="<영상 파일 경로>"
 
 uv run "${SCRIPTS}/detect_ng.py" "${VIDEO}" \
+  --model "${WHISPER_MODEL}" \
   --out /tmp/ng_log.json
 ```
 
@@ -107,8 +132,6 @@ uv run "${SCRIPTS}/detect_ng.py" "${VIDEO}" \
 | A: 키워드 NG | 세그먼트 텍스트에 NG 키워드 포함 시 해당 구간 제거 | "잠깐", "다시", "아니", "죄송", "NG", "컷" 등 |
 | B: 반복 구절 | 인접 세그먼트 Jaccard ≥ 0.45 → 앞 세그먼트 NG | "안녕하세요 저는" → "안녕하세요 저는 오늘" |
 | C: 급정지 | 발화 < 3초 + 단어 < 4개 + 이후 침묵 > 1.5초 | 말하다 갑자기 멈추고 재시작 |
-
-Whisper 모델 기본값은 `tiny` (빠른 속도 우선). 정확도가 필요하면 `--model small` 사용.
 
 ### 단계 2: 클립 구간 생성
 
@@ -147,11 +170,10 @@ uv run "${SCRIPTS}/capcut_editor.py" /tmp/final_segments.json \
 
 | 사용자 발화 | 동작 |
 |------------|------|
-| "컷편집해줘" | Whisper 전사 → NG 감지 → 전체 파이프라인 |
+| "컷편집해줘" | 모델 선택 → Whisper 전사 → NG 감지 → 전체 파이프라인 |
 | "NG도 같이 제거해줘" | 동일 (기본 포함) |
-| "NG 감지만 다시 해줘" | `detect_ng.py`만 재실행 (words.json 캐시 재사용) |
+| "NG 감지만 다시 해줘" | `detect_ng.py`만 재실행 (words.json 캐시 재사용, 모델 질문 생략) |
 | "구간 생성만 다시 해줘" | `make_segments.py`만 재실행 |
-| "Whisper small 모델로" | `detect_ng.py --model small` |
 
 ## 캐시 활용
 
@@ -173,5 +195,5 @@ uv run "${SCRIPTS}/capcut_editor.py" /tmp/final_segments.json \
 
 - **CapCut 종료 필수** — 실행 중에 파일을 수정해도 CapCut이 재실행 시 덮어씀
 - **NG 키워드 오탐** — "다시"가 정상 발화에 포함될 수 있음. 결과 확인 후 `--jaccard` 조정
-- **tiny 모델 한계** — NG 키워드 오인식 가능. `--model small` 사용 시 정확도 향상
-- **긴 영상** — Whisper 전사 시간 = 영상 길이 × (1/10 ~ 1/30). 30분 영상 기준 tiny는 1~3분 소요
+- **모델 선택 기준** — NG 감지는 STT 텍스트 기반이므로 small 이상 권장. tiny는 빠르지만 한국어 오인식으로 패턴 A·B 감지율이 낮을 수 있음
+- **긴 영상** — 30분 영상 기준: tiny ~1분, small ~3분, medium ~15분 소요
