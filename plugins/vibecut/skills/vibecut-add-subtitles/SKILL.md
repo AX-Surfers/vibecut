@@ -63,9 +63,11 @@ AskUserQuestion(questions=[{
     "header": "Whisper 모델",
     "multiSelect": False,
     "options": [
-        {"label": "small (Recommended)", "description": "5분 ~2분. 한국어 정확도 높음."},
-        {"label": "medium", "description": "~10분. 전문 용어·불명확한 발음 권장."},
-        {"label": "large-v3", "description": "~30분+. 최고 정확도."},
+        {"label": "small (Recommended)", "description": "5분 ~2분. 한국어 정확도 높음. 대부분 권장."},
+        {"label": "large-v3-turbo", "description": "~5분. large-v3 대비 6× 빠르고 정확도 유사."},
+        {"label": "large-v3", "description": "~30분+. 최고 범용 정확도."},
+        {"label": "deepdml/faster-whisper-large-v3-ko-cls (한국어 특화)",
+         "description": "한국어 fine-tuned. HuggingFace 첫 실행 시 자동 다운로드."},
     ]
 }])
 ```
@@ -189,21 +191,56 @@ uv run "${SCRIPTS}/detect_ng.py" /tmp/${PROJECT_NAME}_edited.wav \
 
 ### 단계 4: SRT 생성 + subtitle_input.json dump
 
+word-split으로 세분화 후 SRT 생성 → 문법 경계 분할기가 더 깔끔한 입력을 받습니다.
+
 ```python
 import json
 
 PROJECT_NAME = "<프로젝트명>"
 segs = json.load(open(f"/tmp/{PROJECT_NAME}_edited_words.json", encoding="utf-8"))
+
+def split_seg(seg):
+    words = [w for w in seg.get('words', []) if 'start' in w and 'end' in w]
+    if len(words) < 3:
+        return [{'start': seg['start'], 'end': seg['end'], 'text': seg['text'].strip()}]
+    durs = [w['end'] - w['start'] for w in words]
+    sorted_d = sorted(durs)
+    trimmed = sorted_d[:max(1, int(len(sorted_d) * 0.7))]
+    mean_d = sum(trimmed) / len(trimmed)
+    dur_thr = max(2.5, mean_d * 3.0)
+    cut_after = set()
+    for i in range(len(words) - 1):
+        if durs[i] > dur_thr or words[i+1]['start'] - words[i]['end'] > 1.5:
+            cut_after.add(i)
+    if not cut_after:
+        return [{'start': seg['start'], 'end': seg['end'], 'text': seg['text'].strip()}]
+    result, cur = [], []
+    for i, w in enumerate(words):
+        cur.append(w)
+        if i in cut_after:
+            if cur[-1]['end'] - cur[0]['start'] >= 0.3:
+                result.append({'start': cur[0]['start'], 'end': cur[-1]['end'],
+                               'text': ''.join(x['word'] for x in cur).strip()})
+            cur = []
+    if cur and cur[-1]['end'] - cur[0]['start'] >= 0.3:
+        result.append({'start': cur[0]['start'], 'end': cur[-1]['end'],
+                       'text': ''.join(x['word'] for x in cur).strip()})
+    return result if result else [{'start': seg['start'], 'end': seg['end'], 'text': seg['text'].strip()}]
+
+sub_segs = []
+for seg in segs:
+    sub_segs.extend(split_seg(seg))
+
+def fmt(t):
+    h=int(t//3600); m=int((t%3600)//60); sec=int(t%60); ms=int((t%1)*1000)
+    return f"{h:02d}:{m:02d}:{sec:02d},{ms:03d}"
+
 srt_lines = []
-for i, seg in enumerate(segs, 1):
-    s, e = seg["start"], seg["end"]
-    def fmt(t):
-        h=int(t//3600); m=int((t%3600)//60); sec=int(t%60); ms=int((t%1)*1000)
-        return f"{h:02d}:{m:02d}:{sec:02d},{ms:03d}"
-    srt_lines.append(f"{i}\n{fmt(s)} --> {fmt(e)}\n{seg['text'].strip()}\n")
+for i, seg in enumerate(sub_segs, 1):
+    srt_lines.append(f"{i}\n{fmt(seg['start'])} --> {fmt(seg['end'])}\n{seg['text']}\n")
 
 open(f"/tmp/{PROJECT_NAME}_edited.srt", "w", encoding="utf-8").write("\n".join(srt_lines))
-print(f"SRT 생성: {len(segs)}개 세그먼트")
+print(f"SRT 생성: 원본 {len(segs)}개 → word-split 후 {len(sub_segs)}개 세그먼트")
 ```
 
 ```bash

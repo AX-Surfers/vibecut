@@ -73,14 +73,13 @@ AskUserQuestion(questions=[{
     "options": [
         {"label": "small (Recommended)",
          "description": "5분 영상 ~2분. 한국어 정확도 높음. 대부분 권장."},
-        {"label": "tiny",
-         "description": "~30초. 빠르지만 오인식 多. NG 분석 정확도 낮음."},
-        {"label": "base",
-         "description": "~1분. tiny보다 정확, small보다 빠름."},
-        {"label": "medium",
-         "description": "~10분. 전문 용어·불명확한 발음에 권장."},
+        {"label": "large-v3-turbo",
+         "description": "~5분. large-v3 대비 6× 빠르고 정확도 유사. 빠른 고품질이 필요할 때."},
         {"label": "large-v3",
-         "description": "~30분+. 최고 정확도."},
+         "description": "~30분+. 최고 범용 정확도. 느리지만 가장 정확."},
+        {"label": "deepdml/faster-whisper-large-v3-ko-cls (한국어 특화)",
+         "description": "한국어 fine-tuned 모델. HuggingFace 첫 실행 시 자동 다운로드. "
+                        "한국어 전문 용어·발음에 강점."},
     ]
 }])
 ```
@@ -117,23 +116,64 @@ uv run "${SCRIPTS}/detect_ng.py" "${VIDEO}" \
 
 #### 2-A: 읽기 쉬운 transcript 생성
 
+Whisper 세그먼트를 침묵 기반으로 세분화합니다 — 각 항목 = 한 번의 시도(take).
+이 덕분에 Claude가 세그먼트 내부 반복까지 취로 감지합니다.
+
 ```bash
 python3 - <<'PYEOF'
-import json, sys
+import json
+
+def split_seg(seg):
+    """단어 간 침묵/긴 duration으로 세분화 (Vrew 방식)."""
+    words = [w for w in seg.get('words', []) if 'start' in w and 'end' in w]
+    if len(words) < 3:
+        return [(seg['start'], seg['end'], seg['text'].strip())]
+
+    durs = [w['end'] - w['start'] for w in words]
+    sorted_d = sorted(durs)
+    trimmed = sorted_d[:max(1, int(len(sorted_d) * 0.7))]
+    mean_d = sum(trimmed) / len(trimmed)
+    dur_thr = max(2.5, mean_d * 3.0)
+
+    cut_after = set()
+    for i in range(len(words) - 1):
+        if durs[i] > dur_thr or words[i+1]['start'] - words[i]['end'] > 1.5:
+            cut_after.add(i)
+
+    if not cut_after:
+        return [(seg['start'], seg['end'], seg['text'].strip())]
+
+    groups, cur = [], []
+    for i, w in enumerate(words):
+        cur.append(w)
+        if i in cut_after:
+            text = ''.join(x['word'] for x in cur).strip()
+            if cur[-1]['end'] - cur[0]['start'] >= 0.3:
+                groups.append((cur[0]['start'], cur[-1]['end'], text))
+            cur = []
+    if cur:
+        text = ''.join(x['word'] for x in cur).strip()
+        if cur[-1]['end'] - cur[0]['start'] >= 0.3:
+            groups.append((cur[0]['start'], cur[-1]['end'], text))
+
+    return groups if groups else [(seg['start'], seg['end'], seg['text'].strip())]
 
 words_path = "${WORDS_JSON}"
 segs = json.loads(open(words_path).read())
 
 lines = []
+sub_count = 0
 for seg in segs:
-    t = seg["start"]
-    m, s = divmod(int(t), 60)
-    lines.append(f"[{m:02d}:{s:02d} ({t:.1f}s)] {seg['text'].strip()}")
+    subs = split_seg(seg)
+    sub_count += len(subs)
+    for ss, se, text in subs:
+        m, s = divmod(int(ss), 60)
+        lines.append(f"[{m:02d}:{s:02d} ({ss:.1f}~{se:.1f}s)] {text}")
 
-transcript = "\n".join(lines)
+transcript = '\n'.join(lines)
 open("/tmp/transcript.txt", "w").write(transcript)
-print(f"세그먼트: {len(segs)}개")
-print(transcript[:3000])  # 처음 3000자 미리보기
+print(f"원본 세그먼트: {len(segs)}개 → 분할 후: {sub_count}개 (Vrew 방식)")
+print(transcript[:3000])
 PYEOF
 ```
 
@@ -141,15 +181,17 @@ PYEOF
 
 `/tmp/transcript.txt`를 **전체 읽은 후** 아래 기준으로 NG 구간을 판단합니다.
 
+> 각 줄 = 한 번의 시도(take). 타임스탬프 형식: `[MM:SS (시작~끝s)]`
+> word-split으로 세분화했으므로 같은 내용의 복수 시도가 별도 줄로 보입니다.
+
 **NG 판단 기준:**
 
 | 패턴 | 예시 | 판단 방법 |
 |------|------|----------|
-| 문장 내 자기 반복 | "최근에 엄청난 최근에 엄청난" | 동일 어절이 한 세그먼트 안에서 반복 |
-| 복수 시도 | 같은 내용을 2~4회 다르게 말함 | 연속 세그먼트에서 유사 내용 반복 |
-| 명시적 NG 신호 | "잠깐", "다시", "아니", "죄송" | 해당 세그먼트 + 직전 세그먼트까지 포함 |
-| 불완전 발화 | 문장이 중간에 끊기고 재시작 | 짧고 의미 없는 단편 발화 |
-| 급정지 후 재시작 | 말하다 갑자기 멈추고 다시 시작 | 직전 세그먼트가 짧고 이후 유사 내용 등장 |
+| 복수 시도 | 인접 줄이 같거나 비슷한 내용 | 마지막 시도만 남기고 앞의 것 모두 NG |
+| 명시적 NG 신호 | "잠깐", "다시", "아니", "죄송" | 해당 줄 + 직전 줄까지 NG |
+| 불완전 발화 | 문장이 중간에 끊기고 재시작 | 짧고 의미 없는 단편 줄 |
+| 급정지 후 재시작 | 직전 줄이 짧고 이후 유사 내용 등장 | 직전 줄을 NG |
 
 **NG 구간 확장 규칙:**
 - NG 신호어("다시", "잠깐")가 있으면 **신호어 이전** 발화까지 포함 (신호어가 지칭하는 NG 구간)

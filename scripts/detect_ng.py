@@ -80,19 +80,21 @@ def extract_audio(video_path: Path) -> Path:
     return wav_path
 
 
-def transcribe(audio_path: Path, model_name: str = "tiny") -> list[dict]:
+def transcribe(audio_path: Path, model_name: str = "small") -> list[dict]:
     """faster-whisper로 한국어 전사 + 단어 타임스탬프.
 
     audio_path: WAV 파일 경로 (영상이 아닌 오디오를 직접 받음)
-    NG 감지 목적이므로 tiny 모델 기본값 (빠른 속도 우선).
     반환: [{start, end, text, words: [{start, end, word}, ...]}, ...]
     """
     py = sys.executable
     print(f"  Whisper 전사 중 (모델: {model_name}, 대상: {audio_path.name}) ...")
     script = (
         "from faster_whisper import WhisperModel\nimport json\n"
-        f'model = WhisperModel("{model_name}", device="cpu", compute_type="int8")\n'
-        f'segs, _ = model.transcribe("{audio_path}", language="ko", beam_size=1, word_timestamps=True)\n'
+        f'model = WhisperModel("{model_name}", device="cpu", compute_type="int8", cpu_threads=0, num_workers=4)\n'
+        f'segs, _ = model.transcribe("{audio_path}", language="ko", beam_size=5, best_of=5,'
+        f' word_timestamps=True, vad_filter=True,'
+        f' vad_parameters={{"min_silence_duration_ms":500,"speech_pad_ms":200}},'
+        f' temperature=[0.0,0.2,0.4,0.6,0.8,1.0], condition_on_previous_text=True)\n'
         "result = []\n"
         "for s in segs:\n"
         "    words = [{'start': w.start, 'end': w.end, 'word': w.word} for w in (s.words or [])]\n"
@@ -143,13 +145,69 @@ def load_or_transcribe(video_path: Path, words_path: Path | None,
 
 
 # ──────────────────────────────────────────
+# 침묵 기반 sub-segment 분할
+# ──────────────────────────────────────────
+
+def split_to_subsegments(segments: list[dict]) -> list[dict]:
+    """각 Whisper 세그먼트를 단어 간 침묵/긴 duration으로 세분화.
+
+    large-v3: inter-word gap > 1.5s 감지 (패턴 B)
+    small/medium: word duration > 2.5s 감지 (패턴 A)
+    두 패턴을 함께 적용하므로 모델 무관하게 동작.
+    """
+    ABS_DUR = 2.5
+    MUL_DUR = 3.0
+    GAP_THR = 1.5
+    MIN_DUR = 0.5
+
+    result: list[dict] = []
+    for seg in segments:
+        words = [w for w in seg.get("words", []) if "start" in w and "end" in w]
+        if len(words) < 3:
+            result.append(seg)
+            continue
+
+        durs = [w["end"] - w["start"] for w in words]
+        sorted_d = sorted(durs)
+        trimmed = sorted_d[:max(1, int(len(sorted_d) * 0.7))]
+        mean_d = sum(trimmed) / len(trimmed)
+        dur_thr = max(ABS_DUR, mean_d * MUL_DUR)
+
+        cut_after: set[int] = set()
+        for i in range(len(words) - 1):
+            if durs[i] > dur_thr or words[i + 1]["start"] - words[i]["end"] > GAP_THR:
+                cut_after.add(i)
+
+        if not cut_after:
+            result.append(seg)
+            continue
+
+        cur: list[dict] = []
+        for i, w in enumerate(words):
+            cur.append(w)
+            if i in cut_after:
+                if cur[-1]["end"] - cur[0]["start"] >= MIN_DUR:
+                    text = "".join(x["word"] for x in cur).strip()
+                    result.append({"start": cur[0]["start"], "end": cur[-1]["end"],
+                                   "text": text, "words": list(cur)})
+                cur = []
+        if cur and cur[-1]["end"] - cur[0]["start"] >= MIN_DUR:
+            text = "".join(x["word"] for x in cur).strip()
+            result.append({"start": cur[0]["start"], "end": cur[-1]["end"],
+                           "text": text, "words": list(cur)})
+
+    return result
+
+
+# ──────────────────────────────────────────
 # 패턴 A: NG 키워드 감지
 # ──────────────────────────────────────────
 
 def detect_keyword_ng(segments: list[dict]) -> list[tuple[float, float]]:
-    """NG 키워드가 포함된 세그먼트를 NG 구간으로 마킹."""
+    """NG 키워드가 포함된 sub-segment를 NG 구간으로 마킹."""
+    subsegments = split_to_subsegments(segments)
     ng_spans: list[tuple[float, float]] = []
-    for seg in segments:
+    for seg in subsegments:
         text = seg.get("text", "").strip()
         for kw in NG_KEYWORDS:
             if kw in text:
@@ -173,15 +231,17 @@ def jaccard(text_a: str, text_b: str) -> float:
 
 def detect_repeat_ng(segments: list[dict],
                      threshold: float = REPEAT_JACCARD_THRESHOLD) -> list[tuple[float, float]]:
-    """인접 세그먼트 간 유사도 >= threshold → 앞 세그먼트 NG.
+    """word-split 후 인접 sub-segment 간 유사도 >= threshold → 앞 구간 NG.
 
-    같은 내용을 두 번 말한 경우 앞의 것(실수한 버전)을 제거.
+    먼저 split_to_subsegments로 세분화하여 Whisper 세그먼트 내부 반복도 감지.
+    같은 내용을 두 번 말한 경우 앞의 것(실수 버전)을 제거.
     """
+    subsegments = split_to_subsegments(segments)
     ng_spans: list[tuple[float, float]] = []
-    for i in range(len(segments) - 1):
-        sim = jaccard(segments[i].get("text", ""), segments[i + 1].get("text", ""))
+    for i in range(len(subsegments) - 1):
+        sim = jaccard(subsegments[i].get("text", ""), subsegments[i + 1].get("text", ""))
         if sim >= threshold:
-            ng_spans.append((segments[i]["start"], segments[i]["end"]))
+            ng_spans.append((subsegments[i]["start"], subsegments[i]["end"]))
     return ng_spans
 
 
@@ -195,14 +255,16 @@ def detect_abrupt_stop_ng(segments: list[dict],
 
     speech_spans: [[start_sec, end_sec], ...] — 발화 구간 (무음 제거 후)
     침묵 구간을 계산하기 위해 필요. 없으면 호출하지 않음.
+    sub-segment 분할 후 각 구간에 대해 검사.
     """
     if not speech_spans:
         return []
 
+    subsegments = split_to_subsegments(segments)
     sorted_spans = sorted(speech_spans)
     ng_spans: list[tuple[float, float]] = []
 
-    for seg in segments:
+    for seg in subsegments:
         dur = seg["end"] - seg["start"]
         if dur >= SHORT_SPEECH_MAX:
             continue
@@ -264,9 +326,10 @@ def main():
                         help="speech_segments.json 경로 (패턴 C에 사용)")
     parser.add_argument("--out", default=None,
                         help="출력 ng_log.json 경로 (기본: {stem}_ng_log.json)")
-    parser.add_argument("--model", default="tiny",
-                        choices=["tiny", "base", "small", "medium", "large-v3"],
-                        help="Whisper 모델 (기본: tiny, NG 감지엔 충분)")
+    parser.add_argument("--model", default="small",
+                        help="Whisper 모델 또는 HuggingFace 모델 ID (기본: small). "
+                             "예: small, large-v3, large-v3-turbo, "
+                             "deepdml/faster-whisper-large-v3-ko-cls")
     parser.add_argument("--jaccard", type=float, default=REPEAT_JACCARD_THRESHOLD,
                         help=f"반복 구절 유사도 임계값 (기본: {REPEAT_JACCARD_THRESHOLD})")
     args = parser.parse_args()
@@ -292,6 +355,8 @@ def main():
 
     print("\n[1/2] 전사 로드")
     segments = load_or_transcribe(video_path, words_path, args.model)
+    subsegments = split_to_subsegments(segments)
+    print(f"  원본 세그먼트: {len(segments)}개 → word-split 후: {len(subsegments)}개")
 
     print("\n[2/2] NG 패턴 감지")
 

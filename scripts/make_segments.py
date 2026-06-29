@@ -48,6 +48,12 @@ MERGE_GAP_SEC = 0.5
 # 병합 후에도 이 길이보다 짧으면 버림
 MIN_SPEECH_SEC = 0.3
 
+# [개선 4] 단어 수준 sub-segment 분리
+# Whisper CTC 정렬 특성: 발화 후 무음이 해당 단어의 duration에 흡수됨
+# → 비정상적으로 긴 단어 = 무음 내포 → 해당 단어 앞뒤로 분리
+WORD_SPLIT_ABS_SEC = 2.5   # 이 초 이상인 단어는 무음 내포로 판단 (절대 임계값)
+WORD_SPLIT_MUL    = 3.0    # 세그먼트 평균 단어 길이의 N배 이상이면 분리
+
 # [개선 3] 필러 패턴 (whisper 전사 기반)
 # 전체 텍스트가 이 패턴만 있으면 저품질 구간으로 판단
 FILLER_PATTERNS = [
@@ -220,25 +226,116 @@ def apply_filler_filter(spans, transcript_data, speech_spans, max_dur=5.0):
 
 
 # ──────────────────────────────────────────────
+# [개선 4] 단어 수준 sub-segment 분리
+# ──────────────────────────────────────────────
+
+def split_segment_by_long_words(segment, abs_threshold=WORD_SPLIT_ABS_SEC,
+                                 mul_threshold=WORD_SPLIT_MUL,
+                                 gap_threshold=1.5,
+                                 min_dur=MIN_SPEECH_SEC):
+    """Whisper 세그먼트 내 무음 구간을 감지해 sub-segment로 분리.
+
+    Whisper 모델별 무음 표현 방식이 다름:
+      small/medium: 무음 = 직전 단어 duration에 흡수 → 단어 duration 이상값 감지
+      large-v3:     무음 = 단어 사이 gap (word[i].end → word[i+1].start) 으로 표현
+
+    두 패턴 모두 처리:
+      [A] 단어 duration > max(abs_threshold, mean × mul_threshold)
+          → group 1: segment.start ~ long_word.start
+          → group 2: long_word.end ~ segment.end  (무음 구간 skip)
+
+      [B] 단어 사이 gap > gap_threshold
+          → group 1: segment.start ~ word[i].end
+          → group 2: word[i+1].start ~ segment.end  (gap skip)
+    """
+    words = [w for w in segment.get('words', [])
+             if 'start' in w and 'end' in w]
+    if len(words) < 3:
+        return [(segment['start'], segment['end'])]
+
+    durations = [w['end'] - w['start'] for w in words]
+
+    # [A] duration 기반: 평균 상위 30% outlier 제거 후 임계값 계산
+    sorted_d = sorted(durations)
+    trimmed = sorted_d[:max(1, int(len(sorted_d) * 0.7))]
+    mean_dur = sum(trimmed) / len(trimmed)
+    dur_threshold = max(abs_threshold, mean_dur * mul_threshold)
+
+    # 분리점 수집 (마지막 단어 제외)
+    split_points = []  # (group1_end, group2_start)
+    for i, (w, dur) in enumerate(zip(words[:-1], durations[:-1])):
+        # [A] 단어 duration이 비정상적으로 길면 → 무음이 duration에 흡수된 것
+        if dur > dur_threshold:
+            split_points.append((w['start'], w['end']))  # long_word 앞뒤로 분리
+            continue
+        # [B] 다음 단어 시작이 현재 단어 끝보다 훨씬 늦으면 → 사이에 실제 gap 존재
+        next_w = words[i + 1]
+        gap = next_w['start'] - w['end']
+        if gap > gap_threshold:
+            split_points.append((w['end'], next_w['start']))  # gap 자체를 skip
+
+    if not split_points:
+        return [(segment['start'], segment['end'])]
+
+    # 겹치는 split_points 제거 (정렬 후 이전 group2_start 이후만 허용)
+    split_points.sort()
+    merged = [split_points[0]]
+    for g1e, g2s in split_points[1:]:
+        if g1e >= merged[-1][1]:  # 이전 group2_start 이후에 위치
+            merged.append((g1e, g2s))
+    split_points = merged
+
+    result = []
+    cur_start = segment['start']
+    for group1_end, group2_start in split_points:
+        if group1_end - cur_start >= min_dur:
+            result.append((cur_start, group1_end))
+        cur_start = group2_start  # gap/silence 구간 skip
+
+    if segment['end'] - cur_start >= min_dur:
+        result.append((cur_start, segment['end']))
+
+    return result if result else [(segment['start'], segment['end'])]
+
+
+# ──────────────────────────────────────────────
 # Whisper 세그먼트 기반 클립 단위 생성
 # ──────────────────────────────────────────────
 
 def build_from_words_json(words_json_path, ng_spans=None, pad=0.05,
                           merge_gap=MERGE_GAP_SEC, min_dur=MIN_SPEECH_SEC,
-                          ng_threshold=NG_REMOVE_THRESHOLD):
+                          ng_threshold=NG_REMOVE_THRESHOLD,
+                          word_split=True):
     """faster-whisper words.json 세그먼트를 클립 단위로 변환.
 
     ffmpeg 발화 구간 대신 Whisper가 인식한 문장 단위를 클립 경계로 사용.
     → 문장 중간 잘림 원천 차단 (Whisper 세그먼트가 문장 의미 단위로 분리됨)
     → 문장 사이 침묵은 자동 제거 (취할 구간만 열거하므로)
+    → [개선 4] 세그먼트 내 비정상적으로 긴 단어로 반복 발화 구간 추가 분리
 
     words_json: [{"start": float, "end": float, "text": str, "words": [...]}, ...]
     """
     with open(words_json_path, encoding='utf-8') as f:
         segments = json.load(f)
 
-    spans = [(max(0.0, s['start'] - pad), s['end'] + pad)
-             for s in segments if s['end'] - s['start'] >= min_dur]
+    spans = []
+    split_count = 0
+    for s in segments:
+        if s['end'] - s['start'] < min_dur:
+            continue
+        if word_split:
+            sub = split_segment_by_long_words(s, min_dur=min_dur)
+            if len(sub) > 1:
+                split_count += 1
+                text_preview = s.get('text', '').strip()[:50]
+                print(f'  [단어분리] {s["start"]:.1f}~{s["end"]:.1f}s → {len(sub)}개 | "{text_preview}"')
+        else:
+            sub = [(s['start'], s['end'])]
+        for ss, se in sub:
+            spans.append((max(0.0, ss - pad), se + pad))
+
+    if word_split:
+        print(f'  단어 수준 분리: {split_count}개 세그먼트에서 sub-segment 생성')
 
     total_before = len(spans)
     if ng_spans:
@@ -360,6 +457,8 @@ def main():
                         help=f'NG 제거 비율 임계값 (기본: {NG_REMOVE_THRESHOLD})')
     parser.add_argument('--merge-gap', type=float, default=MERGE_GAP_SEC,
                         help=f'갭 병합 임계값(초) (기본: {MERGE_GAP_SEC})')
+    parser.add_argument('--no-word-split', action='store_true',
+                        help='단어 수준 sub-segment 분리 비활성화 (기본: 활성화)')
     args = parser.parse_args()
 
     # Whisper 세그먼트 기반 모드 (--words-json 지정 시)
@@ -383,6 +482,7 @@ def main():
             merge_gap=args.merge_gap,
             min_dur=0.3,
             ng_threshold=args.ng_threshold,
+            word_split=not args.no_word_split,
         )
 
         with open(args.out, 'w') as f:
