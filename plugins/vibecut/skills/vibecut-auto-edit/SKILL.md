@@ -1,6 +1,6 @@
 ---
 name: vibecut-auto-edit
-version: 0.4.0
+version: 0.5.0
 description: |
   Whisper 전사 → Claude가 transcript 직접 분석 → NG 구간 제거 → CapCut 적용.
   Jaccard/키워드 방식 대신 Claude가 텍스트를 읽고 반복·실수·불완전 발화를 직접 판단.
@@ -77,12 +77,29 @@ AskUserQuestion(questions=[{
          "description": "~5분. large-v3 대비 6× 빠르고 정확도 유사. 빠른 고품질이 필요할 때."},
         {"label": "large-v3",
          "description": "~30분+. 최고 범용 정확도. 느리지만 가장 정확."},
-        {"label": "deepdml/faster-whisper-large-v3-ko-cls (한국어 특화)",
-         "description": "한국어 fine-tuned 모델. HuggingFace 첫 실행 시 자동 다운로드. "
-                        "한국어 전문 용어·발음에 강점."},
     ]
 }])
 ```
+
+⚠ **커뮤니티 한국어 fine-tune 모델은 기본 옵션으로 제시하지 않습니다.**
+과거 실전에서 두 개의 한국어 특화 모델이 모두 문제를 일으켰습니다:
+- `ghost613/faster-whisper-large-v3-turbo-korean` — 52분 영상 중 51분을 통째로
+  누락 (긴 오디오에서 디코딩 실패)
+- `seastar105/whisper-medium-komixv2` — 문장은 인식하지만 단어 밀도가 낮아
+  `make_segments.py`의 word-split 로직과 결합하면 실제 발화까지 무음으로
+  오판해 파편 클립 양산 (→ `make_segments.py` 기본값이 `word_split=False`로
+  바뀌어 이 위험은 완화되었지만, 모델 자체의 낮은 인식률 문제는 여전함)
+
+사용자가 특정 한국어 파인튜닝 모델을 명시적으로 요청하면:
+1. `curl -s -o /dev/null -w "%{http_code}"  https://huggingface.co/<repo>` 로
+   실제 존재하는지 먼저 확인 (모델명을 지어내거나 추측하지 말 것)
+2. CTranslate2 형식이 아니면(`library_name: transformers`) 로컬 변환 필요:
+   `uv run --with ctranslate2 --with "transformers[sentencepiece]" --with torch
+   ct2-transformers-converter --model <repo> --output_dir <dir> --quantization int8`
+3. 변환/전사 후 **words.json의 세그먼트 수와 단어 밀도를 확인** — 영상 길이
+   대비 세그먼트가 지나치게 적으면(예: 50분 영상에 30개 미만) 긴 구간을
+   통째로 누락했을 가능성이 높으므로 즉시 사용자에게 알리고 검증 없이
+   진행하지 말 것
 
 ### 단계 1: Whisper 전사
 
@@ -235,6 +252,22 @@ uv run "${SCRIPTS}/make_segments.py" \
   --out /tmp/final_segments.json
 ```
 
+기본값은 Whisper 세그먼트(문장) 전체를 클립 경계로 사용하며, 세그먼트 내부를
+단어 단위로 더 잘게 쪼개지 않는다 (`word_split=False`가 기본). 문장이 중간에
+끊기지 않아야 한다는 원칙을 지키기 위함이다. word-level 타임스탬프가
+검증된 모델(공식 large-v3 등)에서 세그먼트 내부의 긴 무음까지 추가로
+제거하고 싶다면 `--word-split`을 명시적으로 붙인다 — 단, 단어 인식 밀도가
+낮으면 실제 발화까지 무음으로 오판해 0.4~1.6초짜리 파편 클립이 양산될 수
+있으니(실전에서 확인된 실패 사례) 결과를 반드시 클립 길이 분포로 확인할 것.
+
+⚠ **클립 끝단이 종결어미("-요", "-다" 등)를 잘라먹는 문제 (실전 실패 사례):**
+Whisper의 단어 종료 타임스탬프는 실제 발음이 끝나기 살짝 전에 찍히는 경향이
+있다. 크로스페이드 없이 하드컷으로 바로 이어붙이는 파이프라인 특성상 이
+미세한 손실이 "문장이 잘린다"는 체감으로 이어진다. 이를 보정하기 위해 클립
+끝 패딩을 시작 패딩(0.05초)보다 넉넉하게(`WORD_END_PAD_SEC = 0.2`초) 잡는
+것이 기본값이다. 그래도 잘림이 느껴지면 `--pad-end 0.3` 등으로 더 늘릴 수
+있다.
+
 ### 단계 4: CapCut JSON 적용
 
 ```bash
@@ -243,6 +276,59 @@ PROJECT="<CapCut 프로젝트 경로>"
 uv run "${SCRIPTS}/capcut_editor.py" /tmp/final_segments.json \
   --project "${PROJECT}"
 ```
+
+## 부분 재편집 (사용자가 CapCut에서 이미 손으로 다듬은 뒤 나머지만 다시 편집)
+
+**트리거**: "N분까지는 내가 편집했어, 뒷부분만 다시 해줘", "일부만 다시 잘라줘",
+"앞부분은 그대로 두고 뒤만 손봐줘" 등.
+
+핵심: 사용자가 CapCut에서 직접 자른 구간은 **덮어쓰지 않고 그대로 보존**하며,
+그 뒤(원본 영상 기준)만 새로 생성한 편집안으로 교체합니다.
+
+1. **경계를 사용자 말로 어림잡지 말 것.** "1분까지"처럼 사용자가 말하는
+   시점은 대개 편집본(target) 기준 대략치이며, 실제 원본(source) 기준 경계와
+   다를 수 있다. 반드시 현재 draft_info.json을 직접 읽어서 경계를 찾는다:
+
+   ```bash
+   python3 -c "
+   import json
+   PROJECT = '<CapCut 프로젝트 경로>'
+   d = json.load(open(PROJECT + '/draft_info.json'))
+   segs = d['tracks'][0]['segments']
+   for i, s in enumerate(segs):
+       sr = s['source_timerange']
+       print(i, sr['start']/1e6, (sr['start']+sr['duration'])/1e6)
+   "
+   ```
+
+   사용자가 언급한 대략적 시점(target 기준) 근처의 클립을 찾아 그 클립의
+   **source_timerange 끝 값**을 실제 경계로 사용한다. 문장이 끊기지 않도록
+   경계는 항상 클립 끝(다음 클립 시작 직전)에 맞춘다.
+
+2. 위 "단계 1~3"을 다시 실행해 **전체 영상 기준** 새 `final_segments.json`을
+   생성한다 (words.json 캐시는 재사용 가능, NG 분석은 새로 하는 게 안전 —
+   보존 구간 이후에서 새로 발견되는 NG가 있을 수 있음).
+
+3. `splice_segments.py`로 보존 구간 + 신규 구간을 이어붙인다:
+
+   ```bash
+   uv run "${SCRIPTS}/splice_segments.py" \
+     --project "${PROJECT}" \
+     --keep-until <1단계에서 찾은 source 끝 시각> \
+     --new-segments /tmp/final_segments.json \
+     --out /tmp/final_segments_spliced.json
+   ```
+
+   `--keep-count <N>` 으로 클립 개수 기준 지정도 가능. 스크립트가 새 구간 중
+   경계와 겹치는 것은 자동으로 건너뛰어 중복 재생을 막는다.
+
+4. `capcut_editor.py`에 `/tmp/final_segments_spliced.json`을 적용한다
+   (단계 4와 동일, CapCut 종료 확인 필수).
+
+⚠ 사용자가 CapCut을 계속 열어두고 편집 중일 수 있으므로, 적용 직전 반드시
+CapCut을 다시 종료 확인하고 draft_info.json을 **적용 시점에 새로 읽어서**
+경계를 계산할 것 — 이전에 읽어둔 값을 재사용하면 그 사이 사용자가 추가로
+편집한 내용을 덮어쓰게 된다.
 
 ## 캐시 활용
 
@@ -259,6 +345,7 @@ uv run "${SCRIPTS}/capcut_editor.py" /tmp/final_segments.json \
 | "컷편집해줘" | 전체 파이프라인 |
 | "NG만 다시 분석해줘" | words.json 재사용 → transcript 재분석 → ng_log.json 재작성 |
 | "구간 생성만 다시 해줘" | make_segments.py만 재실행 |
+| "N분까지는 편집했어, 뒷부분만 다시 해줘" | "부분 재편집" 절차 (위 섹션) — draft_info.json에서 실제 경계 확인 → 전체 재분석 → splice_segments.py로 병합 |
 
 ## 자막도 함께 추가하려면
 

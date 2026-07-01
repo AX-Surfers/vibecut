@@ -66,11 +66,13 @@ AskUserQuestion(questions=[{
         {"label": "small (Recommended)", "description": "5분 ~2분. 한국어 정확도 높음. 대부분 권장."},
         {"label": "large-v3-turbo", "description": "~5분. large-v3 대비 6× 빠르고 정확도 유사."},
         {"label": "large-v3", "description": "~30분+. 최고 범용 정확도."},
-        {"label": "deepdml/faster-whisper-large-v3-ko-cls (한국어 특화)",
-         "description": "한국어 fine-tuned. HuggingFace 첫 실행 시 자동 다운로드."},
     ]
 }])
 ```
+
+⚠ 커뮤니티 한국어 fine-tune 모델을 기본 옵션으로 제시하지 않습니다 — 실전에서
+검증 없이 신뢰했다가 긴 오디오 대부분을 누락한 사례가 있습니다. 자세한 배경과
+안전하게 사용하는 절차는 `vibecut-auto-edit` 스킬의 동일 섹션을 참고하세요.
 
 ### 실행
 

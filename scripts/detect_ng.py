@@ -328,8 +328,11 @@ def main():
                         help="출력 ng_log.json 경로 (기본: {stem}_ng_log.json)")
     parser.add_argument("--model", default="small",
                         help="Whisper 모델 또는 HuggingFace 모델 ID (기본: small). "
-                             "예: small, large-v3, large-v3-turbo, "
-                             "deepdml/faster-whisper-large-v3-ko-cls")
+                             "예: small, large-v3, large-v3-turbo. "
+                             "커스텀 HF 모델 ID를 쓰려면 사용 전 실제 존재 여부와 "
+                             "CTranslate2 호환 여부를 확인할 것 (존재하지 않는 저장소나 "
+                             "긴 오디오에서 인식률이 급락하는 파인튜닝 모델이 실전에서 "
+                             "발견된 바 있음)")
     parser.add_argument("--jaccard", type=float, default=REPEAT_JACCARD_THRESHOLD,
                         help=f"반복 구절 유사도 임계값 (기본: {REPEAT_JACCARD_THRESHOLD})")
     args = parser.parse_args()

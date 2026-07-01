@@ -48,6 +48,13 @@ MERGE_GAP_SEC = 0.5
 # 병합 후에도 이 길이보다 짧으면 버림
 MIN_SPEECH_SEC = 0.3
 
+# [개선 5] 클립 끝단 패딩 (초)
+# Whisper 단어 종료 타임스탬프는 실제 발음이 끝나기 살짝 전에 찍히는 경향이
+# 있음 (한국어 종결어미 "-요"/"-다" 등에서 두드러짐). 크로스페이드 없는
+# 하드컷 파이프라인 특성상 이 미세한 손실이 "문장이 잘린다"는 체감으로
+# 이어지므로, 시작 패딩(0.05초)보다 넉넉하게 잡는다.
+WORD_END_PAD_SEC = 0.2
+
 # [개선 4] 단어 수준 sub-segment 분리
 # Whisper CTC 정렬 특성: 발화 후 무음이 해당 단어의 duration에 흡수됨
 # → 비정상적으로 긴 단어 = 무음 내포 → 해당 단어 앞뒤로 분리
@@ -302,19 +309,41 @@ def split_segment_by_long_words(segment, abs_threshold=WORD_SPLIT_ABS_SEC,
 # Whisper 세그먼트 기반 클립 단위 생성
 # ──────────────────────────────────────────────
 
-def build_from_words_json(words_json_path, ng_spans=None, pad=0.05,
+def build_from_words_json(words_json_path, ng_spans=None, pad=0.05, pad_end=None,
                           merge_gap=MERGE_GAP_SEC, min_dur=MIN_SPEECH_SEC,
                           ng_threshold=NG_REMOVE_THRESHOLD,
-                          word_split=True):
+                          word_split=False):
     """faster-whisper words.json 세그먼트를 클립 단위로 변환.
 
     ffmpeg 발화 구간 대신 Whisper가 인식한 문장 단위를 클립 경계로 사용.
     → 문장 중간 잘림 원천 차단 (Whisper 세그먼트가 문장 의미 단위로 분리됨)
     → 문장 사이 침묵은 자동 제거 (취할 구간만 열거하므로)
     → [개선 4] 세그먼트 내 비정상적으로 긴 단어로 반복 발화 구간 추가 분리
+      (word_split=True로 opt-in. 기본값은 False — 아래 "실전 실패 사례" 참고)
+
+    ⚠ 끝단 패딩(pad_end)이 시작 패딩(pad)보다 넉넉해야 함 (실전 실패 사례):
+      Whisper의 단어 종료 타임스탬프는 실제 발음이 끝나기 살짝 전에 찍히는
+      경향이 있다. 특히 한국어 종결어미("-요", "-다" 등 부드럽게 흐려지는
+      발음)에서 두드러져, 대칭 패딩(예: 양쪽 다 0.05초)을 쓰면 클립마다
+      마지막 음절 꼬리가 매번 잘려나간다. 클립 사이에 크로스페이드 없이
+      하드컷으로 바로 이어붙이는 파이프라인 특성상 이 미세한 손실이 그대로
+      "문장이 잘린다"는 체감으로 이어진다. pad_end 기본값을 pad(시작)보다
+      크게 잡아 이를 보정한다.
+
+    ⚠ word_split=True 주의사항 (실전 실패 사례로 기본값을 False로 변경함):
+      단어 duration/gap을 "무음"으로 해석하는 이 로직은 word-level 타임스탬프가
+      신뢰할 수 있다는 전제에 의존한다. 인식률이 낮은 모델(특히 커뮤니티
+      fine-tune)로 전사하면 실제로는 계속 말하고 있는데도 단어가 드문드문만
+      인식되어, 단어 사이 간격이 전부 "무음"으로 오판되고 그 사이의 실제
+      발화가 통째로 잘려나간다. 결과물은 0.4~1.6초짜리 파편 클립이 수십 개
+      이어지는 형태로 나타나며, 사용자에게는 "편집이 너무 러프하다"로
+      체감된다. 단어 인식 밀도가 낮을 가능성이 있으면(성긴 words.json,
+      비공식 파인튜닝 모델) 반드시 False로 유지할 것.
 
     words_json: [{"start": float, "end": float, "text": str, "words": [...]}, ...]
     """
+    _pad_end = pad_end if pad_end is not None else max(pad, WORD_END_PAD_SEC)
+
     with open(words_json_path, encoding='utf-8') as f:
         segments = json.load(f)
 
@@ -332,7 +361,7 @@ def build_from_words_json(words_json_path, ng_spans=None, pad=0.05,
         else:
             sub = [(s['start'], s['end'])]
         for ss, se in sub:
-            spans.append((max(0.0, ss - pad), se + pad))
+            spans.append((max(0.0, ss - pad), se + _pad_end))
 
     if word_split:
         print(f'  단어 수준 분리: {split_count}개 세그먼트에서 sub-segment 생성')
@@ -457,8 +486,15 @@ def main():
                         help=f'NG 제거 비율 임계값 (기본: {NG_REMOVE_THRESHOLD})')
     parser.add_argument('--merge-gap', type=float, default=MERGE_GAP_SEC,
                         help=f'갭 병합 임계값(초) (기본: {MERGE_GAP_SEC})')
+    parser.add_argument('--pad-end', type=float, default=WORD_END_PAD_SEC,
+                        help=f'클립 끝단 패딩(초) — 종결어미 잘림 방지 (기본: {WORD_END_PAD_SEC})')
+    parser.add_argument('--word-split', action='store_true',
+                        help='단어 수준 sub-segment 분리 활성화 (기본: 비활성화). '
+                             '단어 인식 밀도가 낮은 모델에서는 실제 발화까지 무음으로 '
+                             '오판해 파편 클립을 양산할 수 있으니, word timestamp 신뢰도가 '
+                             '검증된 경우에만 켤 것')
     parser.add_argument('--no-word-split', action='store_true',
-                        help='단어 수준 sub-segment 분리 비활성화 (기본: 활성화)')
+                        help='(하위 호환용, 기본 동작과 동일 — 이제 아무 효과 없음)')
     args = parser.parse_args()
 
     # Whisper 세그먼트 기반 모드 (--words-json 지정 시)
@@ -479,10 +515,11 @@ def main():
             args.words_json,
             ng_spans=ng_spans,
             pad=0.05,
+            pad_end=args.pad_end,
             merge_gap=args.merge_gap,
             min_dur=0.3,
             ng_threshold=args.ng_threshold,
-            word_split=not args.no_word_split,
+            word_split=args.word_split,
         )
 
         with open(args.out, 'w') as f:
