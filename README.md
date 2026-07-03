@@ -47,7 +47,32 @@ Claude Code 인터랙티브 터미널(`claude` 명령)에서 세 줄로 완료�
 유튜브 설명 써줘
 ```
 
-## 설치 — Codex CLI / 일반 사용
+## 설치 — Codex CLI (Agent Skills)
+
+Codex CLI는 Claude Code와 같은 오픈 [Agent Skills](https://code.claude.com/docs/en/skills) 포맷(`SKILL.md`)을 읽습니다.
+`~/.codex/skills/`에 스킬 폴더를 복사하면 자동 인식됩니다:
+
+```bash
+# 방법 A: skills CLI로 4개 스킬 한 번에 설치
+npx skills add AX-Surfers/vibecut
+
+# 방법 B: 저장소를 직접 클론해 스킬 폴더만 심볼릭 링크
+git clone https://github.com/AX-Surfers/Vibecut.git ~/.vibecut/app
+mkdir -p ~/.codex/skills
+for s in vibecut-setup vibecut-auto-edit vibecut-add-subtitles vibecut-youtube-description; do
+  ln -s ~/.vibecut/app/plugins/vibecut/skills/$s ~/.codex/skills/$s
+done
+
+# 이후 Codex 세션에서
+codex
+> vibecut 설정해줘
+> ~/Movies/test.mov에 자막을 추가해줘
+```
+
+> 스킬 폴더만 설치되어 `scripts/`가 함께 딸려오지 않는 경우, `vibecut-setup` 스킬이
+> 실행 시점에 저장소를 `~/.vibecut/app`에 자동으로 클론해 확보합니다 — 별도 조치 불필요.
+
+## 설치 — Codex `--exec` / 일반 사용 (스킬 없이)
 
 ```bash
 # 1. 저장소 클론
@@ -55,7 +80,8 @@ git clone https://github.com/AX-Surfers/Vibecut.git
 cd Vibecut
 
 # 2. uv 설치 (없으면)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -LsSf https://astral.sh/uv/install.sh | sh          # macOS/Linux
+# Windows: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 
 # 3. 사용
 codex --exec "AGENTS.md를 참고해서 ~/Movies/test.mov에 자막을 추가해줘"
@@ -70,11 +96,24 @@ uv run scripts/add_subtitles.py ~/Movies/test.mov --model small
 
 | 항목 | 버전 / 설명 |
 |------|-----------|
-| OS | macOS (CapCut 데스크탑) |
+| OS | macOS · Windows (CapCut 데스크탑이 있는 플랫폼) |
 | Python | 3.11+ (uv가 자동 관리) |
-| CapCut | 데스크탑 버전 (앱스토어) |
+| CapCut | 데스크탑 버전 |
 | Whisper 모델 | `tiny` ~ `large-v3` 선택 가능 (기본 `small`) |
 | 디스크 | 모델 다운로드: small=~500MB, medium=~1.5GB, large-v3=~3GB |
+
+### 환경변수 (선택)
+
+| 변수 | 용도 |
+|------|------|
+| `VIBECUT_CAPCUT_DIR` | CapCut 프로젝트 루트 경로 직접 지정 (자동 탐지가 틀릴 때) |
+| `VIBECUT_TEMPLATE_NAME` | 템플릿으로 쓸 CapCut 프로젝트 이름 지정 |
+| `VIBECUT_CORRECTIONS` | 오인식 사전(corrections.json) 경로 직접 지정 |
+
+> Windows 지원은 `scripts/_platform.py`의 CapCut 프로젝트 경로 자동 탐지·프로세스
+> 종료 로직까지는 반영되어 있으나, Windows판 CapCut의 `draft_info.json` 스키마가
+> macOS판과 100% 동일한지는 아직 실기기에서 검증되지 않았습니다. 이슈로 제보해주시면
+> 빠르게 확인하겠습니다.
 
 ---
 
@@ -122,6 +161,8 @@ Vibecut/
 │       ├── vibecut-add-subtitles/SKILL.md     ← 자막 자동 생성·검증·적용
 │       └── vibecut-youtube-description/SKILL.md ← 유튜브 제목·설명·챕터 생성
 ├── scripts/                     ← uv-ready Python 스크립트
+│   ├── _platform.py             ← macOS/Windows 경로·프로세스 유틸 (공용)
+│   ├── doctor.py                ← 환경 진단/초기화 (vibecut-setup이 호출)
 │   ├── add_subtitles.py         ← 영상 → Whisper 자막 → CapCut 프로젝트
 │   ├── capcut_editor.py         ← CapCut JSON 컷편집 (무음 제거용)
 │   ├── detect_ng.py             ← Whisper 전사 + NG 패턴 감지

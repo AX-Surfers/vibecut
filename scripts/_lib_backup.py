@@ -18,8 +18,10 @@ import tarfile
 import time
 from pathlib import Path
 
+from _platform import capcut_backup_root
+
 # 백업 보관 위치 — 프로젝트 폴더가 통째로 삭제돼도 살아남도록 별도 디렉토리
-BACKUP_ROOT = Path.home() / "Movies/CapCut/User Data/Projects/.vibecut_backups"
+BACKUP_ROOT = capcut_backup_root()
 
 # 백업할 파일 패턴 (JSON + 메타 정보만 — 미디어 제외)
 BACKUP_PATTERNS = [

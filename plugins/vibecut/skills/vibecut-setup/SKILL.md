@@ -17,100 +17,77 @@ allowed-tools:
 # vibecut-setup 스킬
 
 플러그인 설치 후 **한 번만** 실행하면 이후 모든 스킬이 별도 설정 없이 동작합니다.
+실제 진단 로직(uv/ffmpeg 확인, CapCut 경로 탐지, 의존성 설치, config 저장)은
+`scripts/doctor.py`에 있습니다 — macOS·Windows 모두 순수 Python으로 동작합니다.
+이 스킬은 그 `doctor.py`를 어떤 설치 경로(Claude Code 플러그인, Codex CLI,
+수동 클론)에서도 찾아서 실행하는 역할만 합니다.
 
 ## 처리 흐름
 
 ```
-[1] uv 설치 확인 → 없으면 자동 설치
-[2] ffmpeg 확인 → 없으면 설치 안내 (경고만, 중단하지 않음)
-[3] 플러그인 캐시에서 scripts 디렉토리 자동 탐색
-[4] uv sync — Python 의존성 사전 설치
-[5] ~/.vibecut/config.json 저장
-[6] 완료 보고
+[1] scripts 디렉토리 확보 (config → 플러그인 캐시 → git clone 순으로 탐색)
+[2] uv run scripts/doctor.py 실행
+      ├─ uv 설치 확인 → 없으면 안내
+      ├─ ffmpeg 확인 → 없으면 설치 안내 (경고만, 중단하지 않음)
+      ├─ 플랫폼별 CapCut 프로젝트 디렉토리 탐지
+      ├─ uv sync — Python 의존성 사전 설치
+      └─ ~/.vibecut/config.json 저장 (scripts_dir, platform, capcut_projects_dir)
+[3] 완료 보고
 ```
 
 ## 실행 절차
 
-### 1단계: uv 확인 및 설치
+### 1단계: scripts 디렉토리 확보
 
 ```bash
-if ! command -v uv >/dev/null 2>&1; then
-  echo "uv가 없습니다. 자동 설치합니다..."
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  export PATH="${HOME}/.local/bin:${PATH}"
-  echo "✅ uv 설치 완료: $(uv --version)"
-else
-  echo "✅ uv: $(uv --version)"
+VIBECUT_CONFIG="${HOME}/.vibecut/config.json"
+SCRIPTS=""
+if [ -f "${VIBECUT_CONFIG}" ]; then
+  SCRIPTS=$(python3 -c "import json; print(json.load(open('${VIBECUT_CONFIG}')).get('scripts_dir',''))" 2>/dev/null)
 fi
-```
-
-### 2단계: ffmpeg 확인
-
-```bash
-if command -v ffmpeg >/dev/null 2>&1; then
-  echo "✅ ffmpeg: $(ffmpeg -version 2>&1 | head -1)"
-else
-  echo "⚠️  ffmpeg 없음 — 자막 추가(모드 B, 편집 타임라인 기준)에 필요합니다."
-  echo "   설치: brew install ffmpeg"
+if [ -z "${SCRIPTS}" ]; then
+  # Claude Code 플러그인으로 설치된 경우 — 플러그인 캐시에 scripts/가 함께 딸려옴
+  SCRIPTS=$(find "${HOME}/.claude/plugins/cache/vibecut" -name "capcut_editor.py" -maxdepth 8 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
 fi
-```
-
-ffmpeg가 없어도 무음 제거·NG 제거(vibecut-auto-edit)는 정상 동작합니다.
-
-### 3단계: scripts 디렉토리 자동 탐색
-
-플러그인 캐시(`~/.claude/plugins/cache/vibecut`)에서 `capcut_editor.py`를 탐색해 경로를 결정합니다.
-
-```bash
-SCRIPTS=$(find "${HOME}/.claude/plugins/cache/vibecut" \
-  -name "capcut_editor.py" -maxdepth 8 2>/dev/null \
-  | head -1 | xargs dirname 2>/dev/null)
+if [ -z "${SCRIPTS}" ]; then
+  # Codex CLI 등 스킬 폴더만 설치된 경우 — 저장소를 직접 받아 scripts/를 확보
+  APP_DIR="${HOME}/.vibecut/app"
+  echo "Vibecut 저장소를 ${APP_DIR}에 내려받습니다..."
+  if [ -d "${APP_DIR}/.git" ]; then
+    git -C "${APP_DIR}" pull --ff-only
+  else
+    git clone --depth 1 https://github.com/AX-Surfers/Vibecut.git "${APP_DIR}"
+  fi
+  [ -f "${APP_DIR}/scripts/capcut_editor.py" ] && SCRIPTS="${APP_DIR}/scripts"
+fi
 
 if [ -z "${SCRIPTS}" ]; then
   echo "❌ scripts 디렉토리를 찾을 수 없습니다."
   echo "   플러그인이 설치됐는지 확인하세요: /plugin install vibecut@vibecut"
+  echo "   또는 git이 설치되어 있는지 확인하세요."
   exit 1
 fi
 echo "✅ scripts 경로: ${SCRIPTS}"
 ```
 
-### 4단계: Python 의존성 사전 설치
-
-scripts 상위 디렉토리(플러그인 루트)에서 `uv sync`를 실행해 whisper 등 의존성을 미리 설치합니다.
+### 2단계: doctor.py 실행
 
 ```bash
-PLUGIN_DIR=$(dirname "${SCRIPTS}")
-echo "의존성 설치 중... (처음엔 1~2분 소요)"
-cd "${PLUGIN_DIR}" && uv sync 2>&1 | tail -5
-echo "✅ Python 의존성 설치 완료"
+uv run "${SCRIPTS}/doctor.py"
 ```
 
-### 5단계: config 저장
+이 한 번의 호출로 uv/ffmpeg 확인, 플랫폼별 CapCut 프로젝트 디렉토리 탐지,
+`uv sync`, `~/.vibecut/config.json` 저장이 모두 처리됩니다. uv가 아직 없다면
+먼저 설치를 안내합니다:
 
 ```bash
-mkdir -p "${HOME}/.vibecut"
-python3 - <<'PYEOF'
-import json, os, pathlib
-
-scripts = os.environ.get('SCRIPTS') or ''
-cfg_path = pathlib.Path.home() / '.vibecut' / 'config.json'
-
-existing = {}
-if cfg_path.exists():
-    try:
-        existing = json.loads(cfg_path.read_text())
-    except Exception:
-        pass
-
-existing['scripts_dir'] = scripts
-cfg_path.write_text(json.dumps(existing, indent=2, ensure_ascii=False) + '\n')
-print(f"✅ config 저장 완료: {cfg_path}")
-PYEOF
+which uv || curl -LsSf https://astral.sh/uv/install.sh | sh   # macOS/Linux
+# Windows: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-`SCRIPTS` 환경변수를 python 서브셸에 전달하려면 3단계에서 `export SCRIPTS="${SCRIPTS}"`를 먼저 실행합니다.
+### 3단계: 완료 보고
 
-### 6단계: 완료 보고
+`doctor.py`가 다음과 같은 요약을 출력하면 설정이 끝난 것입니다:
 
 ```
 ✅ Vibecut 설정 완료!
@@ -119,10 +96,16 @@ PYEOF
   /vibecut-auto-edit           — 무음 제거 · NG 감지 컷편집
   /vibecut-add-subtitles       — Whisper 한국어 자막 자동 생성
   /vibecut-youtube-description — 유튜브 제목·설명·챕터 생성
-
-설정 파일: ~/.vibecut/config.json
 ```
+
+## 환경변수 (선택)
+
+| 변수 | 용도 |
+|------|------|
+| `VIBECUT_CAPCUT_DIR` | CapCut 프로젝트 루트 경로를 직접 지정 (자동 탐지 결과가 틀릴 때) |
+| `VIBECUT_TEMPLATE_NAME` | 템플릿으로 쓸 CapCut 프로젝트 이름 지정 (기본: 자동 감지) |
 
 ## 재실행 (업데이트 후)
 
-플러그인 업데이트(`/plugin update vibecut`) 후 재실행하면 새 scripts 경로로 자동 갱신됩니다.
+플러그인 업데이트(`/plugin update vibecut`) 후, 또는 `~/.vibecut/app`을 최신화한
+후 재실행하면 새 scripts 경로/설정으로 자동 갱신됩니다.

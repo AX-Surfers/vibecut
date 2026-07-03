@@ -26,12 +26,13 @@ segments.json 형식: [[start_sec, end_sec], ...] (원본 영상 기준)
 import argparse
 import copy
 import json
-import os
 import shutil
 import subprocess
 import sys
 import uuid
 from pathlib import Path
+
+from _platform import capcut_projects_dir, check_capcut_not_running
 
 # ────────────────────────────────────────────────
 # 상수
@@ -80,18 +81,6 @@ def find_timeline_uuid(project_dir: Path) -> str | None:
         if entry.is_dir() and "-" in entry.name:
             return entry.name
     return None
-
-
-def check_capcut_not_running():
-    """CapCut 실행 중이면 경고 후 종료"""
-    result = subprocess.run(
-        ["pgrep", "-i", "capcut"],
-        capture_output=True, text=True
-    )
-    if result.returncode == 0:
-        print("❌ CapCut이 실행 중입니다. 완전히 종료 후 다시 실행하세요.")
-        print("   Cmd+Q 로 종료 후: ps aux | grep -i capcut | grep -v grep")
-        sys.exit(1)
 
 
 # ────────────────────────────────────────────────
@@ -348,10 +337,9 @@ def main():
     )
     parser.add_argument(
         "--project",
-        default=os.path.expanduser(
-            "~/Movies/CapCut/User Data/Projects/com.lveditor.draft/0526"
-        ),
-        help="CapCut 프로젝트 디렉토리 경로"
+        required=True,
+        help="CapCut 프로젝트 디렉토리 경로 "
+             "(예: ~/Movies/CapCut/User Data/Projects/com.lveditor.draft/내프로젝트)"
     )
     parser.add_argument(
         "--no-check",

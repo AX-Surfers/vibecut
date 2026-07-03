@@ -40,17 +40,28 @@ allowed-tools:
 ### 전제 조건
 
 ```bash
-if pgrep -i "CapCut" > /dev/null 2>&1; then pkill -i "CapCut" && sleep 2; fi
-
 VIBECUT_CONFIG="${HOME}/.vibecut/config.json"
 SCRIPTS=""
 if [ -f "${VIBECUT_CONFIG}" ]; then
   SCRIPTS=$(python3 -c "import json; print(json.load(open('${VIBECUT_CONFIG}')).get('scripts_dir',''))" 2>/dev/null)
 fi
 if [ -z "${SCRIPTS}" ]; then
+  # Claude Code 플러그인으로 설치된 경우 (플러그인 캐시에 scripts/가 함께 딸려옴)
   SCRIPTS=$(find "${HOME}/.claude/plugins/cache/vibecut" -name "capcut_editor.py" -maxdepth 8 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
 fi
+if [ -z "${SCRIPTS}" ]; then
+  # Codex CLI 등 스킬 폴더만 설치된 경우 — 저장소를 직접 받아 scripts/를 확보
+  APP_DIR="${HOME}/.vibecut/app"
+  if [ -d "${APP_DIR}/.git" ]; then
+    git -C "${APP_DIR}" pull --ff-only >/dev/null 2>&1
+  else
+    git clone --depth 1 https://github.com/AX-Surfers/Vibecut.git "${APP_DIR}" >/dev/null 2>&1
+  fi
+  [ -f "${APP_DIR}/scripts/capcut_editor.py" ] && SCRIPTS="${APP_DIR}/scripts"
+fi
 [ -z "${SCRIPTS}" ] && echo "❌ vibecut-setup 먼저 실행" && exit 1
+
+uv run "${SCRIPTS}/_platform.py" quit-capcut
 ```
 
 ### Whisper 모델 선택 (캐시 없을 때만)

@@ -35,10 +35,12 @@ import time
 import uuid
 from pathlib import Path
 
+from _platform import capcut_projects_dir, default_subtitle_font_path, quit_capcut
+
 # ──────────────────────────────────────────
 # 경로 상수
 # ──────────────────────────────────────────
-CAPCUT_PROJECTS = Path.home() / "Movies/CapCut/User Data/Projects/com.lveditor.draft"
+CAPCUT_PROJECTS = capcut_projects_dir()
 ROOT_META       = CAPCUT_PROJECTS / "root_meta_info.json"
 
 # 템플릿 프로젝트: 환경변수 → 자동 감지 (CapCut 내 첫 프로젝트)
@@ -80,9 +82,7 @@ _DEFAULT_TEXT_CONTENT = {
         }],
         "size": 6,
         "font": {
-            "path": "/Users/seungryk/Library/Containers/com.lemon.lvoverseas/Data/Movies/"
-                    "CapCut/User Data/Cache/effect/7480847118538706181/"
-                    "892de34daab569720c6dbc43537e8cf5/font.ttf",
+            "path": default_subtitle_font_path(),
             "id": "7480847118538706181",
         },
     }],
@@ -118,9 +118,7 @@ DEFAULT_TEXT_MATERIAL: dict = {
     "style_name": "", "text_color": "", "text_alpha": 1.0,
     "font_name": "", "font_title": "",
     "font_size": 6.0,
-    "font_path": "/Users/seungryk/Library/Containers/com.lemon.lvoverseas/Data/Movies/"
-                 "CapCut/User Data/Cache/effect/7480847118538706181/"
-                 "892de34daab569720c6dbc43537e8cf5/font.ttf",
+    "font_path": default_subtitle_font_path(),
     "font_id": "", "font_resource_id": "7480847118538706181",
     "initial_scale": 0.0, "font_url": "", "typesetting": 0, "alignment": 1, "line_feed": 1,
     "use_effect_default_color": True, "is_rich_text": False,
@@ -133,9 +131,7 @@ DEFAULT_TEXT_MATERIAL: dict = {
     "fonts": [{
         "id": "", "resource_id": "7480847118538706181", "third_resource_id": "",
         "category_id": "preset", "category_name": "사전 설정", "source_platform": 1,
-        "path": "/Users/seungryk/Library/Containers/com.lemon.lvoverseas/Data/Movies/"
-                "CapCut/User Data/Cache/effect/7480847118538706181/"
-                "892de34daab569720c6dbc43537e8cf5/font.ttf",
+        "path": default_subtitle_font_path(),
         "effect_id": "7480847118538706181", "title": "서울한강체 B",
         "team_id": "", "file_uri": "", "request_id": "",
     }],
@@ -678,20 +674,6 @@ def get_video_duration_us(video_path: Path) -> int:
         capture_output=True, text=True
     )
     return int(float(result.stdout.strip()) * 1_000_000)
-
-
-# ──────────────────────────────────────────
-# Step 0: CapCut 종료
-# ──────────────────────────────────────────
-def quit_capcut():
-    result = subprocess.run(["pgrep", "-x", "CapCut"], capture_output=True)
-    if result.returncode != 0:
-        print("  CapCut 실행 중 아님 — 계속 진행")
-        return
-    print("  CapCut 종료 중...")
-    subprocess.run(["pkill", "-x", "CapCut"])
-    time.sleep(2)
-    print("  CapCut 종료됨")
 
 
 # ──────────────────────────────────────────

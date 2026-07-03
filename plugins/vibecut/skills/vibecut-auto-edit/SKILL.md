@@ -52,11 +52,28 @@ Whisper가 전사한 단어 타임스탬프를 **Claude가 직접 읽고** NG �
 ## 전제 조건
 
 ```bash
-if pgrep -i "CapCut" > /dev/null 2>&1; then
-  echo "⚠ CapCut 실행 중 — 강제 종료합니다..."
-  pkill -i "CapCut" && sleep 2
-fi
 which uv || curl -LsSf https://astral.sh/uv/install.sh | sh
+
+VIBECUT_CONFIG="${HOME}/.vibecut/config.json"
+SCRIPTS=""
+if [ -f "${VIBECUT_CONFIG}" ]; then
+  SCRIPTS=$(python3 -c "import json; print(json.load(open('${VIBECUT_CONFIG}')).get('scripts_dir',''))" 2>/dev/null)
+fi
+if [ -z "${SCRIPTS}" ]; then
+  SCRIPTS=$(find "${HOME}/.claude/plugins/cache/vibecut" -name "capcut_editor.py" -maxdepth 8 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+fi
+if [ -z "${SCRIPTS}" ]; then
+  APP_DIR="${HOME}/.vibecut/app"
+  if [ -d "${APP_DIR}/.git" ]; then
+    git -C "${APP_DIR}" pull --ff-only >/dev/null 2>&1
+  else
+    git clone --depth 1 https://github.com/AX-Surfers/Vibecut.git "${APP_DIR}" >/dev/null 2>&1
+  fi
+  [ -f "${APP_DIR}/scripts/capcut_editor.py" ] && SCRIPTS="${APP_DIR}/scripts"
+fi
+[ -z "${SCRIPTS}" ] && echo "❌ vibecut-setup 먼저 실행" && exit 1
+
+uv run "${SCRIPTS}/_platform.py" quit-capcut
 ```
 
 ## 실행 흐름
@@ -114,6 +131,15 @@ if [ -f "${VIBECUT_CONFIG}" ]; then
 fi
 if [ -z "${SCRIPTS}" ]; then
   SCRIPTS=$(find "${HOME}/.claude/plugins/cache/vibecut" -name "capcut_editor.py" -maxdepth 8 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+fi
+if [ -z "${SCRIPTS}" ]; then
+  APP_DIR="${HOME}/.vibecut/app"
+  if [ -d "${APP_DIR}/.git" ]; then
+    git -C "${APP_DIR}" pull --ff-only >/dev/null 2>&1
+  else
+    git clone --depth 1 https://github.com/AX-Surfers/Vibecut.git "${APP_DIR}" >/dev/null 2>&1
+  fi
+  [ -f "${APP_DIR}/scripts/capcut_editor.py" ] && SCRIPTS="${APP_DIR}/scripts"
 fi
 if [ -z "${SCRIPTS}" ]; then
   echo "❌ vibecut 스크립트를 찾을 수 없습니다. '/vibecut-setup'을 먼저 실행해주세요."

@@ -43,8 +43,10 @@ import time
 import uuid
 from pathlib import Path
 
+from _platform import capcut_projects_dir, quit_capcut
+
 # ── 경로 상수 ──────────────────────────────────────────────────────────────────
-CAPCUT_PROJECTS = Path.home() / "Movies/CapCut/User Data/Projects/com.lveditor.draft"
+CAPCUT_PROJECTS = capcut_projects_dir()
 ROOT_META       = CAPCUT_PROJECTS / "root_meta_info.json"
 
 FPS      = 30
@@ -98,17 +100,6 @@ def get_media_size(path: Path) -> tuple[int, int]:
         except ValueError:
             pass
     return 1920, 1080
-
-
-def quit_capcut():
-    r = subprocess.run(["pgrep", "-x", "CapCut"], capture_output=True)
-    if r.returncode != 0:
-        print("  CapCut 실행 중 아님")
-        return
-    print("  CapCut 종료 중...")
-    subprocess.run(["pkill", "-x", "CapCut"])
-    time.sleep(2)
-    print("  CapCut 종료됨")
 
 
 # ── 템플릿 프로젝트 자동 감지 ──────────────────────────────────────────────────

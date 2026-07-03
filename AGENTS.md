@@ -3,6 +3,13 @@
 > 이 파일은 **Codex CLI** 및 기타 AGENTS.md 호환 도구에서 자동으로 읽힙니다.  
 > Claude Code 사용자는 `.claude-plugin/plugin.json`을 통해 더 풍부한 에이전트/스킬을 사용할 수 있습니다.
 
+## Codex CLI에서 스킬로 사용하기
+
+`plugins/vibecut/skills/*/SKILL.md`는 Claude Code 전용이 아니라 Codex CLI가 지원하는
+표준 [Agent Skills](https://code.claude.com/docs/en/skills) 포맷입니다.
+`~/.codex/skills/`에 각 스킬 폴더를 두면 이 AGENTS.md 없이도 자연어 트리거로 바로
+호출됩니다. 설치 방법은 `README.md`의 "설치 — Codex CLI (Agent Skills)" 섹션 참고.
+
 ## 프로젝트 개요
 
 **Vibecut**은 CapCut(macOS) 영상 프로젝트의 JSON을 직접 수정하여 컷편집과 자막을 자동화하는 도구입니다.
@@ -71,6 +78,13 @@ def frame_to_us(frame: int) -> int:
 
 타임스탬프 누적은 µs가 아닌 프레임 번호로 (부동소수점 오차 방지).
 
+### 0. 플랫폼별 경로 (macOS/Windows)
+
+CapCut 프로젝트 경로, 프로세스 종료(pgrep/pkill vs tasklist/taskkill)는 모두
+`scripts/_platform.py`에 있음. 새 스크립트를 작성할 때 CapCut 경로를 직접
+하드코딩하지 말고 `from _platform import capcut_projects_dir`를 사용할 것.
+자동 탐지가 틀리면 `VIBECUT_CAPCUT_DIR` 환경변수로 오버라이드 가능.
+
 ### 4. 단어 타임스탬프 기반 자막 분리
 
 긴 자막을 시간 균등 분할하면 빠른/느린 발화에서 싱크가 어긋남.  
@@ -98,6 +112,8 @@ Vibecut/
 │   └── skills/             # Claude Code 스킬
 │       └── vibecut-auto-edit/SKILL.md
 ├── scripts/                # 공통 Python 스크립트 (uv-ready)
+│   ├── _platform.py         # macOS/Windows 경로·CapCut 프로세스 유틸 (공용)
+│   ├── doctor.py            # 환경 진단/초기화
 │   ├── add_subtitles.py
 │   ├── capcut_editor.py
 │   └── make_segments.py
