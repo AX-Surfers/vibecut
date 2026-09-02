@@ -265,16 +265,53 @@ def build_segments(final_segs: list, orig_video: dict, orig_segment: dict,
 
 
 # ────────────────────────────────────────────────
+# 편집 대상 트랙 선택
+# ────────────────────────────────────────────────
+
+# 이미지 확장자 — 이런 소재를 참조하는 트랙은 편집 대상이 아니다
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".heic", ".tiff"}
+
+
+def pick_video_track(draft: dict) -> int | None:
+    """편집 대상 비디오 트랙의 인덱스를 고른다.
+
+    ⚠ tracks[0] 고정 가정은 위험하다 (실전 실패 사례):
+      사용자가 배경 이미지나 오버레이를 타임라인에 올리면 그것이 tracks[0]이
+      되어, 원본 영상 대신 이미지를 잘라버린다. 실제로 배경 PNG 1장이
+      "원본 180분 → 편집 후 7.8분, 38개 클립"으로 조각나고 원본 영상 트랙은
+      그대로 남는 사고가 발생했다.
+
+    실제 영상 파일(이미지가 아닌 것)을 참조하는 세그먼트가 가장 많은
+    비디오 트랙을 고른다. 동점이면 세그먼트가 더 많은 쪽, 그다음 위쪽 트랙.
+    """
+    mats = {m["id"]: m for m in draft.get("materials", {}).get("videos", [])}
+    cands = []
+    for idx, track in enumerate(draft.get("tracks", [])):
+        if track.get("type") != "video" or not track.get("segments"):
+            continue
+        n_video = 0
+        for seg in track["segments"]:
+            path = mats.get(seg.get("material_id"), {}).get("path", "")
+            if path and Path(path).suffix.lower() not in IMAGE_EXTS:
+                n_video += 1
+        cands.append((n_video, len(track["segments"]), -idx, idx))
+    if not cands:
+        return None
+    cands.sort(reverse=True)
+    return cands[0][3]
+
+
+# ────────────────────────────────────────────────
 # draft_info.json 업데이트
 # ────────────────────────────────────────────────
 
 def update_draft(draft: dict, new_segments: list, new_materials: dict,
-                 total_duration_us: int) -> dict:
+                 total_duration_us: int, track_idx: int = 0) -> dict:
     """draft dict에 새 세그먼트/materials를 적용하고 반환"""
     d = copy.deepcopy(draft)
 
-    # tracks[0] 세그먼트 교체
-    d["tracks"][0]["segments"] = new_segments
+    # 편집 대상 트랙의 세그먼트 교체
+    d["tracks"][track_idx]["segments"] = new_segments
 
     # materials 교체 (7종)
     for key, val in new_materials.items():
@@ -346,6 +383,13 @@ def main():
         action="store_true",
         help="CapCut 실행 여부 확인 건너뜀 (테스트용)"
     )
+    parser.add_argument(
+        "--track",
+        type=int,
+        default=None,
+        help="편집할 비디오 트랙 인덱스 (기본: 실제 영상을 참조하는 트랙 자동 선택). "
+             "배경 이미지/오버레이가 함께 올라간 프로젝트에서 대상을 강제할 때 사용"
+    )
     args = parser.parse_args()
 
     # CapCut 실행 여부 확인
@@ -371,7 +415,29 @@ def main():
         draft = json.load(f)
 
     videos = draft["materials"]["videos"]
-    orig_segments_list = draft["tracks"][0]["segments"]
+    mats_by_id = {m["id"]: m for m in videos}
+
+    # 편집 대상 트랙 결정 (tracks[0] 고정 금지 — pick_video_track 독스트링 참고)
+    if args.track is not None:
+        track_idx = args.track
+        if not (0 <= track_idx < len(draft["tracks"])):
+            print(f"❌ --track {track_idx}: 트랙 인덱스 범위를 벗어났습니다 "
+                  f"(0~{len(draft['tracks'])-1})")
+            sys.exit(1)
+    else:
+        track_idx = pick_video_track(draft)
+        if track_idx is None:
+            print("❌ 편집할 비디오 트랙을 찾지 못했습니다.")
+            sys.exit(1)
+
+    video_tracks = [i for i, t in enumerate(draft["tracks"])
+                    if t.get("type") == "video" and t.get("segments")]
+    if len(video_tracks) > 1:
+        print(f"⚠ 비디오 트랙이 {len(video_tracks)}개입니다 "
+              f"(인덱스 {video_tracks}) → tracks[{track_idx}]를 편집 대상으로 선택")
+        print("   다른 트랙을 편집하려면 --track N 으로 지정하세요.")
+
+    orig_segments_list = draft["tracks"][track_idx]["segments"]
 
     seg_files = args.segments
 
@@ -383,16 +449,31 @@ def main():
     timeline_frame = 0
 
     for i in range(num):
-        orig_video = videos[i]
         orig_segment = orig_segments_list[i]
+        # 소재는 세그먼트가 실제로 참조하는 것을 쓴다.
+        # videos[i]로 인덱싱하면 materials 순서와 트랙 순서가 어긋날 때 엉뚱한
+        # 소재(예: 배경 이미지)를 편집하게 된다.
+        orig_video = mats_by_id.get(orig_segment.get("material_id")) or videos[i]
+
         with open(seg_files[i], encoding="utf-8") as f:
             final_segs = json.load(f)
 
+        name = orig_video["path"].split("/")[-1]
+        ext = Path(orig_video["path"]).suffix.lower()
+        if ext in IMAGE_EXTS:
+            print(f"\n❌ 편집 대상이 이미지입니다: {name}")
+            print("   원본 영상 트랙이 아닌 배경/오버레이 트랙을 잡았을 가능성이 큽니다.")
+            print("   타임라인에서 이미지 트랙을 빼거나, --track N 으로 영상 트랙을 지정하세요.")
+            sys.exit(1)
+
         total_sec = sum(e - s for s, e in final_segs)
         orig_min = orig_video["duration"] / 1_000_000 / 60
-        print(f"\n🎬 영상 {i+1}: {orig_video['path'].split('/')[-1]}")
+        cut_pct = (1 - total_sec / 60 / orig_min) * 100 if orig_min else 0
+        print(f"\n🎬 영상 {i+1}: {name}")
         print(f"   원본 {orig_min:.1f}분 → 편집 후 {total_sec/60:.1f}분 "
-              f"({(1 - total_sec/60/orig_min)*100:.0f}% 감소, {len(final_segs)}개 클립)")
+              f"({cut_pct:.0f}% 감소, {len(final_segs)}개 클립)")
+        if cut_pct > 90:
+            print(f"   ⚠ 원본의 {cut_pct:.0f}%가 잘려나갑니다. 편집 대상이 맞는지 확인하세요.")
 
         new_segs, new_mats, timeline_frame = build_segments(
             final_segs, orig_video, orig_segment,
@@ -406,7 +487,7 @@ def main():
     print(f"\n🔨 총 {len(all_segs)}개 세그먼트, 전체 {total_us/1e6/60:.1f}분")
 
     # draft 업데이트
-    updated = update_draft(draft, all_segs, all_mats, total_us)
+    updated = update_draft(draft, all_segs, all_mats, total_us, track_idx=track_idx)
 
     # 4개 파일 저장
     print("\n💾 파일 저장 중...")
