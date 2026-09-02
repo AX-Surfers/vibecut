@@ -52,8 +52,17 @@ MIN_SPEECH_SEC = 0.3
 # Whisper 단어 종료 타임스탬프는 실제 발음이 끝나기 살짝 전에 찍히는 경향이
 # 있음 (한국어 종결어미 "-요"/"-다" 등에서 두드러짐). 크로스페이드 없는
 # 하드컷 파이프라인 특성상 이 미세한 손실이 "문장이 잘린다"는 체감으로
-# 이어지므로, 시작 패딩(0.05초)보다 넉넉하게 잡는다.
+# 이어지므로, 시작 패딩보다 넉넉하게 잡는다.
 WORD_END_PAD_SEC = 0.2
+
+# [개선 6] 클립 시작단 패딩 (초) — 실전 실패 사례
+# Whisper 단어 시작 타임스탬프도 종료 타임스탬프와 마찬가지로 실제 발음
+# 시작보다 살짝 늦게 찍히는 경향이 있어, 자음/앞음절이 잘려나가는 문제가
+# 발생한다 (예: "지도만"의 "지"가 잘려 "도만"으로 들림). 기존 0.05초는
+# 이를 방지하기에 부족했으므로 0.12초로 상향한다. 끝단 패딩보다는 여전히
+# 작게 유지 — 시작 쪽은 직전 클립의 꼬리(이미 pad_end로 보정됨)와 겹칠
+# 위험이 있어 과도하게 키우면 이전 클립 말미가 중복 재생될 수 있다.
+WORD_START_PAD_SEC = 0.12
 
 # [개선 4] 단어 수준 sub-segment 분리
 # Whisper CTC 정렬 특성: 발화 후 무음이 해당 단어의 duration에 흡수됨
@@ -309,7 +318,7 @@ def split_segment_by_long_words(segment, abs_threshold=WORD_SPLIT_ABS_SEC,
 # Whisper 세그먼트 기반 클립 단위 생성
 # ──────────────────────────────────────────────
 
-def build_from_words_json(words_json_path, ng_spans=None, pad=0.05, pad_end=None,
+def build_from_words_json(words_json_path, ng_spans=None, pad=None, pad_end=None,
                           merge_gap=MERGE_GAP_SEC, min_dur=MIN_SPEECH_SEC,
                           ng_threshold=NG_REMOVE_THRESHOLD,
                           word_split=False):
@@ -342,7 +351,8 @@ def build_from_words_json(words_json_path, ng_spans=None, pad=0.05, pad_end=None
 
     words_json: [{"start": float, "end": float, "text": str, "words": [...]}, ...]
     """
-    _pad_end = pad_end if pad_end is not None else max(pad, WORD_END_PAD_SEC)
+    _pad = pad if pad is not None else WORD_START_PAD_SEC
+    _pad_end = pad_end if pad_end is not None else max(_pad, WORD_END_PAD_SEC)
 
     with open(words_json_path, encoding='utf-8') as f:
         segments = json.load(f)
@@ -361,7 +371,7 @@ def build_from_words_json(words_json_path, ng_spans=None, pad=0.05, pad_end=None
         else:
             sub = [(s['start'], s['end'])]
         for ss, se in sub:
-            spans.append((max(0.0, ss - pad), se + _pad_end))
+            spans.append((max(0.0, ss - _pad), se + _pad_end))
 
     if word_split:
         print(f'  단어 수준 분리: {split_count}개 세그먼트에서 sub-segment 생성')
@@ -486,6 +496,8 @@ def main():
                         help=f'NG 제거 비율 임계값 (기본: {NG_REMOVE_THRESHOLD})')
     parser.add_argument('--merge-gap', type=float, default=MERGE_GAP_SEC,
                         help=f'갭 병합 임계값(초) (기본: {MERGE_GAP_SEC})')
+    parser.add_argument('--pad-start', type=float, default=WORD_START_PAD_SEC,
+                        help=f'클립 시작단 패딩(초) — 앞글자 잘림 방지 (기본: {WORD_START_PAD_SEC})')
     parser.add_argument('--pad-end', type=float, default=WORD_END_PAD_SEC,
                         help=f'클립 끝단 패딩(초) — 종결어미 잘림 방지 (기본: {WORD_END_PAD_SEC})')
     parser.add_argument('--word-split', action='store_true',
@@ -514,7 +526,7 @@ def main():
         spans = build_from_words_json(
             args.words_json,
             ng_spans=ng_spans,
-            pad=0.05,
+            pad=args.pad_start,
             pad_end=args.pad_end,
             merge_gap=args.merge_gap,
             min_dur=0.3,

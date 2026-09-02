@@ -1,9 +1,10 @@
 ---
 name: vibecut-add-subtitles
-version: 0.5.0
+version: 0.6.0
 description: |
   영상 또는 기존 CapCut 프로젝트에 한국어 자막을 자동 생성·적용.
   Whisper 전사 → 문법 경계 분할 → CapCut JSON 적용.
+  vibecut-auto-edit의 컷 승인 이후 자동 연결 단계(모드 B)로도 호출됨.
   트리거: "자막 추가", "자막 올려줘", "자막 만들어", "/vibecut-add-subtitles"
 metadata:
   category: video
@@ -64,22 +65,16 @@ fi
 uv run "${SCRIPTS}/_platform.py" quit-capcut
 ```
 
-### Whisper 모델 선택 (캐시 없을 때만)
+### Whisper 모델 결정
 
-`{stem}_words.json` 또는 `{stem}.srt`가 있으면 건너뜁니다.
+`{stem}_words.json` 또는 `{stem}.srt`가 있으면 이 단계를 건너뜁니다. 없으면
+질문 없이 바로 `large-v3-turbo`로 고정합니다 (vibecut-auto-edit과 동일 기준).
 
-```python
-AskUserQuestion(questions=[{
-    "question": "Whisper 모델을 선택해주세요.",
-    "header": "Whisper 모델",
-    "multiSelect": False,
-    "options": [
-        {"label": "small (Recommended)", "description": "5분 ~2분. 한국어 정확도 높음. 대부분 권장."},
-        {"label": "large-v3-turbo", "description": "~5분. large-v3 대비 6× 빠르고 정확도 유사."},
-        {"label": "large-v3", "description": "~30분+. 최고 범용 정확도."},
-    ]
-}])
+```bash
+WHISPER_MODEL="large-v3-turbo"
 ```
+
+사용자가 이번 실행만 다른 모델을 명시적으로 요청하면 그 값을 대신 사용합니다.
 
 ⚠ 커뮤니티 한국어 fine-tune 모델을 기본 옵션으로 제시하지 않습니다 — 실전에서
 검증 없이 신뢰했다가 긴 오디오 대부분을 누락한 사례가 있습니다. 자세한 배경과
@@ -189,11 +184,8 @@ ffmpeg -y -f concat -safe 0 -i /tmp/${PROJECT_NAME}_concat.txt \
 
 ### 단계 3: Whisper 전사
 
-`/tmp/{PROJECT_NAME}_edited_words.json`이 있으면 건너뜁니다.
-
-```python
-AskUserQuestion(...)  # 모델 선택 (캐시 없을 때만)
-```
+`/tmp/{PROJECT_NAME}_edited_words.json`이 있으면 건너뜁니다. 없으면 질문 없이
+`WHISPER_MODEL="large-v3-turbo"`로 바로 전사합니다.
 
 ```bash
 uv run "${SCRIPTS}/detect_ng.py" /tmp/${PROJECT_NAME}_edited.wav \
