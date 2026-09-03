@@ -163,10 +163,15 @@ Vibecut/
 ├── scripts/                     ← uv-ready Python 스크립트
 │   ├── _platform.py             ← macOS/Windows 경로·프로세스 유틸 (공용)
 │   ├── doctor.py                ← 환경 진단/초기화 (vibecut-setup이 호출)
-│   ├── add_subtitles.py         ← 영상 → Whisper 자막 → CapCut 프로젝트
-│   ├── capcut_editor.py         ← CapCut JSON 컷편집 (무음 제거용)
-│   ├── detect_ng.py             ← Whisper 전사 + NG 패턴 감지
-│   ├── make_segments.py         ← 발화 구간 생성
+│   ├── find_project.py          ← 영상이 들어 있는 CapCut 프로젝트·타임라인 찾기
+│   ├── transcribe.py            ← Whisper 전사 → {stem}_words.json
+│   ├── make_transcript.py       ← 정적(⏸)·미인식 소리(🔊) 표시된 transcript (Claude가 NG 판단)
+│   ├── make_segments.py         ← NG 제거 클립 구간 생성
+│   ├── capcut_editor.py         ← CapCut JSON 컷편집 (--timeline 멀티 타임라인 지원)
+│   ├── splice_segments.py       ← 부분 재편집 (앞부분 보존 + 뒷부분 교체)
+│   ├── subtitles_from_cuts.py   ← 컷 매핑으로 자막 입력 생성 (재전사 없음)
+│   ├── apply_subtitles.py       ← 기존 프로젝트에 자막 트랙 추가 (다른 트랙 보존)
+│   ├── add_subtitles.py         ← 영상 → Whisper 자막 → 새 CapCut 프로젝트
 │   ├── photo_slideshow.py       ← 사진 폴더 → CapCut 슬라이드쇼
 │   └── _lib_backup.py           ← 자동 백업/복원 유틸
 ├── data/

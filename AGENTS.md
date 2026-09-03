@@ -20,7 +20,10 @@
 |------|---------|------|
 | Whisper 자막 생성 | `scripts/add_subtitles.py` | faster-whisper로 한국어 자막 + 단어 타임스탬프 추출 |
 | 한국어 오인식 자동 교정 | `data/corrections.json` | 누적 사전으로 매번 같은 오인식 자동 처리 |
-| 컷편집 (무음 제거) | `scripts/make_segments.py` | -35dB 이하 무음 구간 자동 감지 |
+| Whisper 전사 | `scripts/transcribe.py` | 단어 타임스탬프 포함 `{stem}_words.json` |
+| NG 판단용 transcript | `scripts/make_transcript.py` | 정적(⏸)·미인식 소리(🔊) 표시 → LLM이 NG 구간 판단 |
+| 컷편집 구간 생성 | `scripts/make_segments.py` | Whisper 문장 경계 + NG 제거 |
+| 자막 (기존 프로젝트) | `scripts/subtitles_from_cuts.py` → `scripts/apply_subtitles.py` | 자막 경계 == 컷 경계, 다른 트랙 보존 |
 | CapCut JSON 적용 | `scripts/capcut_editor.py` | 4개 파일 동시 갱신, .locked 자동 삭제, 30fps 정렬 |
 
 ## Codex CLI 사용법
@@ -36,8 +39,8 @@ codex --exec "before.srt를 검증해서 한국어 오인식을 교정한 뒤 \
   corrections.json 사전을 활용해서 같은 패턴은 자동 처리."
 
 # 3. 무음 제거 컷편집
-codex --exec "make_segments.py로 무음 구간을 계산한 뒤 \
-  capcut_editor.py로 CapCut JSON에 적용해줘."
+codex --exec "transcribe.py → make_transcript.py로 NG 구간을 찾아 ng_log.json을 만들고 \
+  make_segments.py → capcut_editor.py로 CapCut JSON에 적용해줘."
 ```
 
 ## 직접 스크립트 호출 (uv 사용)
@@ -47,8 +50,10 @@ codex --exec "make_segments.py로 무음 구간을 계산한 뒤 \
 ```bash
 # 의존성 자동 설치 + 실행 (uv가 없으면: curl -LsSf https://astral.sh/uv/install.sh | sh)
 uv run scripts/add_subtitles.py <video.mov> --model small
-uv run scripts/make_segments.py --speech speech.json --out segments.json
-uv run scripts/capcut_editor.py segments.json
+uv run scripts/transcribe.py <video.mov>
+uv run scripts/make_transcript.py <video>_words.json
+uv run scripts/make_segments.py --words-json <video>_words.json --ng <video>_ng_log.json
+uv run scripts/capcut_editor.py <video>_segments.json --project <CapCut 프로젝트> [--timeline "타임라인 02"]
 ```
 
 ## 핵심 규칙 (모든 에이전트가 준수)
@@ -114,9 +119,10 @@ Vibecut/
 ├── scripts/                # 공통 Python 스크립트 (uv-ready)
 │   ├── _platform.py         # macOS/Windows 경로·CapCut 프로세스 유틸 (공용)
 │   ├── doctor.py            # 환경 진단/초기화
-│   ├── add_subtitles.py
-│   ├── capcut_editor.py
-│   └── make_segments.py
+│   ├── find_project.py / transcribe.py / make_transcript.py
+│   ├── make_segments.py / capcut_editor.py / splice_segments.py
+│   ├── subtitles_from_cuts.py / apply_subtitles.py
+│   └── add_subtitles.py
 ├── data/
 │   └── corrections.json    # 한국어 오인식 사전 (누적)
 ├── AGENTS.md               # 이 파일 (Codex CLI / 범용)

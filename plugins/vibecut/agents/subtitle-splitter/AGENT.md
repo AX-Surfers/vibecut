@@ -15,7 +15,7 @@ model: claude-sonnet-4-6
 
 ## 역할
 
-`/tmp/subtitle_input.json`을 읽어 각 Whisper 세그먼트의 텍스트를 **한국어 의미·호흡 단위**로 분할하고, 결과를 `/tmp/subtitle_splits.json`에 저장한다.
+호출 시 지정된 입력 파일(기본 `/tmp/subtitle_input.json`, 보통 `<영상>_subtitle_input.json`)을 읽어 각 세그먼트의 텍스트를 **한국어 의미·호흡 단위**로 분할하고, 결과를 지정된 출력 파일(기본 `/tmp/subtitle_splits.json`, 보통 `<영상>_subtitle_splits.json`)에 저장한다. 경로가 프롬프트에 있으면 반드시 그 경로를 쓴다.
 
 `add_subtitles.py`가 단어 타임스탬프를 이 결과에 매핑해 CapCut 자막을 생성한다.
 

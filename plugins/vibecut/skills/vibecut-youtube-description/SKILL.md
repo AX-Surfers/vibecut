@@ -1,6 +1,6 @@
 ---
 name: vibecut-youtube-description
-version: 1.0.0
+version: 1.1.0
 description: |
   CapCut 프로젝트의 자막을 읽어 유튜브 제목·설명·챕터를 자동 생성합니다.
   자막 타임스탬프 기반으로 챕터를 추출하고, 한국어 유튜브 설명 스타일에 맞게 작성합니다.
@@ -24,65 +24,59 @@ allowed-tools:
 
 ```
 CapCut draft_info.json
-   │
-   ├─ [1] 전체 자막 추출 (타임스탬프 + 텍스트)
-   │        ↓ 영상 흐름 파악
-   │
-   ├─ [2] 영상 정보 확인 (GitHub 링크, 커뮤니티 링크 등)
-   │        ↓ config.json 있으면 자동 로딩, 없으면 질문
-   │
-   ├─ [3] 제목 3가지 생성 (클릭률 + 키워드 최적화)
-   │
-   ├─ [4] 설명 생성
-   │        ↓ 후크 → 내용 요약 → 링크 → 📌 다루는 내용 → ⏱️ CHAPTERS
-   │
+   ├─ [1] 프로젝트·타임라인 결정 → 전체 자막 추출 (타임스탬프 + 텍스트)
+   ├─ [2] 영상 정보 확인 (GitHub 링크, 커뮤니티 링크 등) — config 있으면 자동, 없으면 질문
+   ├─ [3] 제목 3가지 생성
+   ├─ [4] 설명 생성 (후크 → 요약 → 링크 → 📌 다루는 내용 → ⏱️ CHAPTERS)
    └─ [5] youtube_description.txt 저장
-              ↓ 영상 파일 위치 또는 프로젝트 루트에 저장
 ```
 
 ## 실행 절차
 
-### 1단계: CapCut 프로젝트 자막 전체 추출
+### 1단계: 프로젝트 결정 + 자막 추출
 
-현재 활성 CapCut 프로젝트의 `draft_info.json`에서 전체 자막을 추출한다.
+경로는 하드코딩하지 않고 설정(`~/.vibecut/config.json`의 `capcut_projects_dir`, 또는
+`VIBECUT_CAPCUT_DIR`)에서 읽습니다. 프로젝트 이름을 모르면 최근 프로젝트를 나열합니다.
 
-```python
-import json
-
-draft_path = "/Users/seungryk/Movies/CapCut/User Data/Projects/com.lveditor.draft/<프로젝트명>/draft_info.json"
-
-with open(draft_path, encoding="utf-8") as f:
-    draft = json.load(f)
-
-texts = draft["materials"]["texts"]
-mat_map = {t["id"]: t for t in texts}
-segs = draft["tracks"][1]["segments"]
-
-subtitles = []
-for seg in segs:
-    start_us  = seg["target_timerange"]["start"]
-    dur_us    = seg["target_timerange"]["duration"]
-    start_s   = start_us / 1_000_000
-    end_s     = (start_us + dur_us) / 1_000_000
-    mat       = mat_map.get(seg["material_id"])
-    if not mat:
-        continue
-    content   = json.loads(mat["content"])
-    text      = content.get("text", "").strip()
-    if text:
-        subtitles.append({"start": start_s, "end": end_s, "text": text})
-
-# 전체 자막 출력
-for s in subtitles:
-    m, sec = divmod(int(s["start"]), 60)
-    print(f"  {m:02d}:{sec:02d}  {s['text']}")
+```bash
+SCRIPTS=$(python3 -c "import json,os; print(json.load(open(os.path.expanduser('~/.vibecut/config.json'))).get('scripts_dir',''))")
+uv run "${SCRIPTS}/find_project.py" --recent 5      # <프로젝트 경로>\t<타임라인 이름들>
+PROJECT="<CapCut 프로젝트 경로>"
+TIMELINE="<타임라인 이름 또는 빈 문자열>"           # 타임라인이 여러 개면 지정 필수
 ```
 
-**프로젝트 경로를 모를 경우**: 가장 최근에 수정된 프로젝트를 찾는다.
 ```bash
-find "/Users/seungryk/Movies/CapCut/User Data/Projects/com.lveditor.draft" \
-  -name "draft_info.json" -not -path "*/bak/*" \
-  | xargs ls -t | head -3
+uv run python - "${PROJECT}" "${TIMELINE}" "${SCRIPTS}" <<'PYEOF'
+import json, sys
+from pathlib import Path
+project, timeline, scripts = sys.argv[1:4]
+sys.path.insert(0, scripts)
+from capcut_editor import draft_path_for, resolve_timeline
+
+proj = Path(project)
+tl, _ = resolve_timeline(proj, timeline or None)
+draft = json.loads(draft_path_for(proj, tl).read_text(encoding="utf-8"))
+mat_map = {t["id"]: t for t in draft["materials"].get("texts", [])}
+
+# 자막 트랙 = type이 text인 트랙 중 세그먼트가 가장 많은 것 (tracks[1] 고정 가정 금지)
+text_tracks = [t for t in draft["tracks"] if t.get("type") == "text" and t.get("segments")]
+if not text_tracks:
+    raise SystemExit("❌ 자막 트랙이 없습니다 — 먼저 vibecut-add-subtitles 를 실행하세요")
+track = max(text_tracks, key=lambda t: len(t["segments"]))
+
+subs = []
+for seg in sorted(track["segments"], key=lambda s: s["target_timerange"]["start"]):
+    mat = mat_map.get(seg["material_id"])
+    if not mat:
+        continue
+    text = json.loads(mat["content"]).get("text", "").strip()
+    if text:
+        subs.append((seg["target_timerange"]["start"] / 1e6, text))
+for st, text in subs:
+    m, s = divmod(int(st), 60)
+    print(f"  {m:02d}:{s:02d}  {text}")
+print(f"\n자막 {len(subs)}줄, 영상 길이 {draft['duration']/1e6/60:.1f}분")
+PYEOF
 ```
 
 ### 2단계: 채널 설정 파일 확인
@@ -174,7 +168,8 @@ MM:SS 챕터2
 <영상_파일_위치>/youtube_description.txt
 ```
 
-영상 파일 경로를 모를 경우 현재 디렉토리에 저장.
+영상 파일 경로를 모를 경우 현재 디렉토리에 저장. 타임라인이 여러 개면
+`youtube_description_<타임라인 이름>.txt`로 분리.
 
 파일 형식:
 ```
@@ -198,8 +193,8 @@ MM:SS 챕터2
 
 | 사용자 발화 | 동작 |
 |------------|------|
-| "유튜브 설명 만들어줘" | 현재 CapCut 프로젝트 자동 탐색 → 전체 파이프라인 실행 |
-| "vibecut 프로젝트 설명 써줘" | "vibecut" 프로젝트 draft_info.json 탐색 |
+| "유튜브 설명 만들어줘" | 최근 프로젝트 확인 → 전체 파이프라인 실행 |
+| "vibecut 프로젝트 설명 써줘" | "vibecut" 프로젝트 탐색 |
 | "제목이랑 챕터만 만들어줘" | 제목 + CHAPTERS 섹션만 생성 |
 | "깃허브 링크 https://... 넣어서 설명 써줘" | 링크를 직접 받아 config 없이 실행 |
 

@@ -32,7 +32,10 @@ import sys
 import uuid
 from pathlib import Path
 
-from _platform import capcut_projects_dir, check_capcut_not_running
+# _platform(플랫폼별 CapCut 종료 확인)은 main()에서만 필요하다. 모듈 최상단에서
+# import하면 pick_video_track 같은 순수 함수를 다른 스크립트(subtitles_from_cuts.py)가
+# 가져다 쓸 때도 _platform.py가 같은 폴더에 있어야 해서, 플러그인 캐시처럼
+# 일부 파일만 복사된 환경에서 import 자체가 죽는다. → main() 안에서 지연 import.
 
 # ────────────────────────────────────────────────
 # 상수
@@ -72,15 +75,67 @@ def frame_to_us(frame: int) -> int:
     return result
 
 
-def find_timeline_uuid(project_dir: Path) -> str | None:
-    """Timelines/ 하위 첫 번째 UUID 디렉토리 반환. 없으면 None."""
-    timelines_dir = project_dir / "Timelines"
-    if not timelines_dir.exists():
-        return None
-    for entry in timelines_dir.iterdir():
-        if entry.is_dir() and "-" in entry.name:
-            return entry.name
-    return None
+def list_timelines(project_dir: Path) -> tuple[list[dict], str | None]:
+    """프로젝트의 타임라인 목록 [{id, name}]과 메인 타임라인 id.
+
+    CapCut은 한 프로젝트에 타임라인을 여러 개 둘 수 있다(하단 탭 "타임라인 01/02").
+    Timelines/project.json에 이름·id·메인 여부가 있고, 루트 draft_info.json은
+    메인 타임라인의 사본이다. project.json이 없으면 폴더 목록으로 대체한다.
+    """
+    tl_dir = project_dir / "Timelines"
+    if not tl_dir.is_dir():
+        return [], None
+    pj = tl_dir / "project.json"
+    if pj.is_file():
+        try:
+            data = json.loads(pj.read_text(encoding="utf-8"))
+            tls = [{"id": t["id"], "name": t.get("name", "")}
+                   for t in data.get("timelines", []) if not t.get("is_marked_delete")]
+            if tls:
+                return tls, data.get("main_timeline_id")
+        except (json.JSONDecodeError, KeyError):
+            pass
+    tls = [{"id": e.name, "name": ""} for e in sorted(tl_dir.iterdir())
+           if e.is_dir() and "-" in e.name]
+    return tls, (tls[0]["id"] if len(tls) == 1 else None)
+
+
+def resolve_timeline(project_dir: Path, timeline: str | None = None) -> tuple[str | None, bool]:
+    """(타임라인 uuid, 루트 draft_info.json도 같이 써야 하는지).
+
+    - 구형 프로젝트(Timelines 없음): (None, True)
+    - 타임라인 1개: 그것. 루트도 함께 갱신.
+    - 여러 개: --timeline(이름 또는 id 앞부분)으로 골라야 한다. 지정이 없으면 목록을
+      보여주고 중단한다 — 첫 폴더를 잡는 옛 동작은 엉뚱한 타임라인을 편집했다.
+    - 루트 파일은 메인 타임라인의 사본이므로 메인일 때만 함께 쓴다.
+    """
+    tls, main_id = list_timelines(project_dir)
+    if not tls:
+        return None, True
+    if timeline:
+        key = timeline.replace(" ", "").lower()
+        hit = [t for t in tls
+               if t["name"].replace(" ", "").lower() == key or t["id"].lower().startswith(key)]
+        if len(hit) != 1:
+            names = ", ".join(f"{t['name'] or '(이름 없음)'} [{t['id'][:8]}]" for t in tls)
+            raise SystemExit(f"❌ 타임라인 '{timeline}'을(를) 찾지 못했습니다. 후보: {names}")
+        chosen = hit[0]
+    elif len(tls) == 1:
+        chosen = tls[0]
+    else:
+        names = "\n".join(f"   - {t['name'] or '(이름 없음)'}  [{t['id'][:8]}]"
+                          + ("  ← 메인" if t["id"] == main_id else "") for t in tls)
+        raise SystemExit(f"❌ 타임라인이 {len(tls)}개입니다. --timeline <이름>으로 지정하세요:\n{names}")
+    is_main = main_id is None or chosen["id"] == main_id
+    print(f"🗂  타임라인: {chosen['name'] or '(이름 없음)'} [{chosen['id'][:8]}]"
+          + ("" if is_main else "  (메인 아님 → 루트 draft_info.json은 건드리지 않음)"))
+    return chosen["id"], is_main
+
+
+def draft_path_for(project_dir: Path, timeline_uuid: str | None) -> Path:
+    if timeline_uuid:
+        return project_dir / "Timelines" / timeline_uuid / "draft_info.json"
+    return project_dir / "draft_info.json"
 
 
 # ────────────────────────────────────────────────
@@ -323,8 +378,13 @@ def update_draft(draft: dict, new_segments: list, new_materials: dict,
     return d
 
 
-def write_4_files(project_dir: Path, timeline_uuid: str | None, updated_draft: dict):
-    """4개 파일 모두 동일하게 저장 (수정 전 자동 백업). timeline_uuid가 None이면 루트 2개만 저장."""
+def write_4_files(project_dir: Path, timeline_uuid: str | None, updated_draft: dict,
+                  write_root: bool = True):
+    """4개 파일 모두 동일하게 저장 (수정 전 자동 백업).
+
+    timeline_uuid가 None이면 루트 2개만, write_root=False(메인이 아닌 타임라인)면
+    Timelines/<uuid>/ 2개만 저장한다 — 루트는 메인 타임라인의 사본이기 때문.
+    """
     # 덮어쓰기 전 자동 백업
     try:
         from _lib_backup import backup_project_json
@@ -334,10 +394,12 @@ def write_4_files(project_dir: Path, timeline_uuid: str | None, updated_draft: d
 
     content = json.dumps(updated_draft, ensure_ascii=False, separators=(',', ':'))
 
-    paths = [
-        project_dir / "draft_info.json",
-        project_dir / "draft_info.json.bak",
-    ]
+    paths = []
+    if write_root or not timeline_uuid:
+        paths += [
+            project_dir / "draft_info.json",
+            project_dir / "draft_info.json.bak",
+        ]
     if timeline_uuid:
         paths += [
             project_dir / "Timelines" / timeline_uuid / "draft_info.json",
@@ -384,6 +446,11 @@ def main():
         help="CapCut 실행 여부 확인 건너뜀 (테스트용)"
     )
     parser.add_argument(
+        "--timeline",
+        default=None,
+        help="타임라인이 여러 개인 프로젝트에서 편집할 타임라인 (이름 예: '타임라인 02', 또는 id 앞부분)"
+    )
+    parser.add_argument(
         "--track",
         type=int,
         default=None,
@@ -394,6 +461,7 @@ def main():
 
     # CapCut 실행 여부 확인
     if not args.no_check:
+        from _platform import check_capcut_not_running
         check_capcut_not_running()
 
     project_dir = Path(args.project).expanduser()
@@ -401,15 +469,11 @@ def main():
         print(f"❌ 프로젝트 디렉토리가 없습니다: {project_dir}")
         sys.exit(1)
 
-    # Timeline UUID 찾기
-    timeline_uuid = find_timeline_uuid(project_dir)
     print(f"📁 프로젝트: {project_dir.name}")
-    if timeline_uuid:
-        print(f"🆔 Timeline UUID: {timeline_uuid}")
-        draft_path = project_dir / "Timelines" / timeline_uuid / "draft_info.json"
-    else:
+    timeline_uuid, write_root = resolve_timeline(project_dir, args.timeline)
+    if not timeline_uuid:
         print("📂 구형 포맷 (Timelines 없음) — 루트 draft_info.json 사용")
-        draft_path = project_dir / "draft_info.json"
+    draft_path = draft_path_for(project_dir, timeline_uuid)
 
     with open(draft_path, encoding="utf-8") as f:
         draft = json.load(f)
@@ -491,7 +555,7 @@ def main():
 
     # 4개 파일 저장
     print("\n💾 파일 저장 중...")
-    write_4_files(project_dir, timeline_uuid, updated)
+    write_4_files(project_dir, timeline_uuid, updated, write_root=write_root)
 
     print("\n✨ 완료! CapCut을 실행해서 확인하세요.")
     print(f"   프로젝트: {project_dir.name}")

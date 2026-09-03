@@ -939,13 +939,10 @@ uv run scripts/add_subtitles.py video.mov --project-name my_project
 
 ```bash
 # CapCut 종료 후 실행
-python3 scripts/capcut_editor.py /tmp/final_segments.json
+uv run scripts/capcut_editor.py <영상>_segments.json --project <프로젝트>
 
-# 무음 제거만 (NG 제거 없이)
-python3 scripts/capcut_editor.py /tmp/speech_segments.json
-
-# 프로젝트 경로 직접 지정
-python3 scripts/capcut_editor.py /tmp/final_segments.json \
+# 타임라인이 여러 개인 프로젝트
+uv run scripts/capcut_editor.py <영상>_segments.json --timeline "타임라인 02" \
   --project "~/Movies/CapCut/User Data/Projects/com.lveditor.draft/새프로젝트"
 ```
 
@@ -953,42 +950,22 @@ python3 scripts/capcut_editor.py /tmp/final_segments.json \
 - 4개 파일 동시 저장 + `.locked` 삭제 자동 처리
 - CapCut 실행 중이면 자동 감지 후 종료
 
-## 컷편집 전체 파이프라인 (v0.3.0 — Whisper 세그먼트 기반)
+## 컷편집 전체 파이프라인 (v0.9 — Whisper 세그먼트 + Claude NG 판단)
 
-> ffmpeg silencedetect는 더 이상 사용하지 않는다. Whisper가 전사한 **문장 세그먼트 = 남길 구간**
-> 이므로 무음 제거와 문장 경계 정렬이 동시에 해결된다.
+> ffmpeg silencedetect는 **정적 표시**에만 쓴다. Whisper가 전사한 문장 세그먼트가 남길 구간이고,
+> NG 판단은 Claude가 transcript를 읽고 한다 (키워드/Jaccard 감지는 폐기).
 
 ```bash
-SCRIPTS="/Users/seungryk/youtube/vibecut/scripts"
-
-# 1. Whisper 전사 + NG 자동 감지 (한 번에)
-#    {stem}_words.json 캐시 있으면 전사 생략
-uv run "${SCRIPTS}/detect_ng.py" input.mp4 \
-  --out /tmp/ng_log.json
-
-# 2. Whisper 세그먼트 기반 클립 구간 생성 (NG 필터 포함)
-uv run "${SCRIPTS}/make_segments.py" \
-  --words-json input_words.json \
-  --ng /tmp/ng_log.json \
-  --out /tmp/final_segments.json
-
-# 3. CapCut JSON 적용
-uv run "${SCRIPTS}/capcut_editor.py" /tmp/final_segments.json
+uv run "${SCRIPTS}/find_project.py" input.mp4                 # 프로젝트·타임라인 찾기
+uv run "${SCRIPTS}/transcribe.py" input.mp4                   # → input_words.json (캐시 재사용)
+uv run "${SCRIPTS}/make_transcript.py" input_words.json       # → input_transcript.txt (⏸/🔊 표시)
+#   Claude가 읽고 input_ng_log.json 작성 → 사용자 검토
+uv run "${SCRIPTS}/make_segments.py" --words-json input_words.json --ng input_ng_log.json
+uv run "${SCRIPTS}/capcut_editor.py" input_segments.json --project <프로젝트> [--timeline "타임라인 02"]
 ```
 
-**오디오 캐시 전략:**
-- `{stem}_audio.wav` — 영상에서 추출한 전체 오디오 (16kHz mono). ffmpeg 추출 1회 후 재사용.
-- `{stem}_words.json` — Whisper 전사 결과. detect_ng / add_subtitles 공유 캐시.
-- `{stem}_edited_audio.wav` — 편집 구간만 이어붙인 오디오 (--segments 모드 시).
-
-**NG 감지 패턴 3가지:**
-
-| 패턴 | 방식 |
-|------|------|
-| A: 키워드 NG | "잠깐", "다시", "아니" 등 NG 키워드 포함 세그먼트 제거 |
-| B: 반복 구절 | 인접 세그먼트 Jaccard ≥ 0.45 → 앞 세그먼트 NG |
-| C: 급정지 | 발화 < 3초 + 단어 < 4개 + 이후 침묵 > 1.5초 |
-
-**NG 제거 임계값:** 세그먼트의 50% 이상 NG와 겹칠 때만 제거.
+- 중간 파일은 모두 영상 옆 `{stem}_*` — `/tmp` 고정 이름은 다른 영상 것과 섞이므로 쓰지 않는다.
+- 타임라인이 여러 개면 `--timeline` 없이는 멈춘다. 메인이 아닌 타임라인은 루트 draft_info.json을 건드리지 않는다.
+- 자막은 `subtitles_from_cuts.py` → subtitle-splitter → `apply_subtitles.py` (다른 트랙 보존).
 
 상세 절차는 `skills/vibecut-auto-edit/SKILL.md` 참조.

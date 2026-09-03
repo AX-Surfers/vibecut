@@ -4,79 +4,55 @@
 # dependencies = []
 # ///
 """
-Vibecut — CapCut 컷편집 구간 생성 스크립트 (개선판, 의존성 없음)
+Vibecut — CapCut 컷편집 구간 생성 (의존성 없음)
 
-사용자 편집 기준 분석을 반영한 3가지 개선:
-  1. NG 완화: NG 구간이 발화의 50% 미만이면 살림 (이진법→비율 기반)
-  2. 갭 병합 강화: 인접 구간 사이 0.5초 이하 갭은 병합 (기존 0.2초)
-  3. 필러 필터: whisper 전사 기반 내용 없는 짧은 구간 제거
+Whisper words.json의 세그먼트(문장)를 클립 경계로 삼고, NG 구간(ng_log.json)을
+잘라낸 뒤 가까운 구간을 병합해 [[start, end], ...]를 만든다.
 
 사용법:
-  python3 make_segments.py \\
-    --speech /tmp/speech_segments.json \\
-    --ng /path/to/hwp(원본)_ng_log.json \\
-    [--transcript /tmp/transcript.json] \\
-    [--out /tmp/final_segments.json]
-
-  python3 make_segments.py --help
+  uv run make_segments.py --words-json <영상>_words.json --ng <영상>_ng_log.json
+  → 기본 출력: <영상>_segments.json (words.json 옆)
 """
 
 import argparse
 import json
-import re
 from pathlib import Path
 
 # ──────────────────────────────────────────────
-# 파라미터 (사용자 편집 패턴 기반으로 조정)
+# 파라미터
 # ──────────────────────────────────────────────
 
-# [개선 1] NG 점유 비율 임계값
-# speech 구간에서 NG가 이 비율 이상이면 해당 구간 제거
-# 기존: NG가 조금이라도 있으면 제거 (= 0.0 임계값)
-# 개선: 50% 이상 차지할 때만 제거 → 사용자의 34% NG 살리기 반영
-NG_REMOVE_THRESHOLD = 0.50
+# NG 점유 비율 임계값: 문장에서 NG가 이 비율 이상이면 문장을 통째로 버린다.
+# 예전 키워드/Jaccard 감지는 경계가 부정확해 50%로 "봐주는" 규칙이 필요했지만,
+# 지금은 Claude가 정확한 구간을 찍으므로 찍은 곳만 잘라야 한다. 0.5였을 때
+# 같은 문장 안에 있던 살릴 재녹음 테이크까지 통째로 날아가는 사고가 있었다.
+NG_REMOVE_THRESHOLD = 1.0
 
-# [개선 1-b] NG 구간 앞뒤 분리 시 최소 잔여 길이
-# 남은 앞/뒤 조각이 이 길이보다 짧으면 버림
+# NG 구간 앞뒤 분리 시 최소 잔여 길이 — 이보다 짧은 조각은 버림
 MIN_RESIDUAL_SEC = 0.3
 
-# [개선 2] 갭 병합 임계값 (초)
-# 기존: 0.2초, 개선: 0.5초 (사용자: 216 덩어리, 내것: 326 덩어리 → 병합 강화)
+# 인접 구간 사이 갭이 이 이하면 병합
 MERGE_GAP_SEC = 0.5
 
-# 최소 발화 구간 길이 (초)
-# 병합 후에도 이 길이보다 짧으면 버림
+# 최소 발화 구간 길이 — 병합 후에도 이보다 짧으면 버림
 MIN_SPEECH_SEC = 0.3
 
-# [개선 5] 클립 끝단 패딩 (초)
+# 클립 끝단 패딩 (초)
 # Whisper 단어 종료 타임스탬프는 실제 발음이 끝나기 살짝 전에 찍히는 경향이
 # 있음 (한국어 종결어미 "-요"/"-다" 등에서 두드러짐). 크로스페이드 없는
 # 하드컷 파이프라인 특성상 이 미세한 손실이 "문장이 잘린다"는 체감으로
 # 이어지므로, 시작 패딩보다 넉넉하게 잡는다.
 WORD_END_PAD_SEC = 0.2
 
-# [개선 6] 클립 시작단 패딩 (초) — 실전 실패 사례
-# Whisper 단어 시작 타임스탬프도 종료 타임스탬프와 마찬가지로 실제 발음
-# 시작보다 살짝 늦게 찍히는 경향이 있어, 자음/앞음절이 잘려나가는 문제가
-# 발생한다 (예: "지도만"의 "지"가 잘려 "도만"으로 들림). 기존 0.05초는
-# 이를 방지하기에 부족했으므로 0.12초로 상향한다. 끝단 패딩보다는 여전히
-# 작게 유지 — 시작 쪽은 직전 클립의 꼬리(이미 pad_end로 보정됨)와 겹칠
-# 위험이 있어 과도하게 키우면 이전 클립 말미가 중복 재생될 수 있다.
+# 클립 시작단 패딩 (초) — 실전 실패 사례
+# 단어 시작 타임스탬프도 실제보다 살짝 늦게 찍혀 자음/앞음절이 잘린다
+# (예: "지도만"의 "지"가 잘려 "도만"으로 들림). 0.05초는 부족해 0.12초로 상향.
+# 끝단 패딩보다는 작게 유지 — 직전 클립 꼬리와 겹치면 말이 중복 재생된다.
 WORD_START_PAD_SEC = 0.12
 
-# [개선 4] 단어 수준 sub-segment 분리
-# Whisper CTC 정렬 특성: 발화 후 무음이 해당 단어의 duration에 흡수됨
-# → 비정상적으로 긴 단어 = 무음 내포 → 해당 단어 앞뒤로 분리
+# 단어 수준 sub-segment 분리 (opt-in)
 WORD_SPLIT_ABS_SEC = 2.5   # 이 초 이상인 단어는 무음 내포로 판단 (절대 임계값)
 WORD_SPLIT_MUL    = 3.0    # 세그먼트 평균 단어 길이의 N배 이상이면 분리
-
-# [개선 3] 필러 패턴 (whisper 전사 기반)
-# 전체 텍스트가 이 패턴만 있으면 저품질 구간으로 판단
-FILLER_PATTERNS = [
-    r'^[네예아어음 ]+$',                    # 단순 감탄사
-    r'^(네|예|아|어|음|그|이제|그래서|근데){1,3}[\.이]?$',  # 짧은 접속사
-    r'^[\.]{1,5}$',                          # 점
-]
 
 
 # ──────────────────────────────────────────────
@@ -93,44 +69,33 @@ def ng_ratio(ss, se, ng_spans):
     dur = se - ss
     if dur <= 0:
         return 0.0
-    total_ng = sum(overlap(ss, se, ns, ne) for ns, ne in ng_spans)
-    return total_ng / dur
+    return sum(overlap(ss, se, ns, ne) for ns, ne in ng_spans) / dur
 
 
 # ──────────────────────────────────────────────
-# 개선 1: NG 처리 (비율 기반)
+# NG 처리
 # ──────────────────────────────────────────────
 
 def apply_ng_filter(speech_spans, ng_spans, threshold=NG_REMOVE_THRESHOLD,
                     min_residual=MIN_RESIDUAL_SEC):
     """
-    각 speech 구간에서 NG 비율에 따라 처리:
+    각 speech 구간에서:
       - NG 비율 >= threshold → 구간 제거
-      - NG 비율 < threshold  → 구간 유지 (NG 포함)
-        단, NG 구간을 잘라낸 뒤 남은 조각이 min_residual 이상인 것만 유지
+      - 그 외 → NG 구간만 잘라내고 min_residual 이상 남은 조각만 유지
     """
     result = []
-
     for ss, se in speech_spans:
         ratio = ng_ratio(ss, se, ng_spans)
-
         if ratio >= threshold:
-            # NG 비율이 높음 → 제거
             continue
-
         if ratio == 0.0:
-            # NG 없음 → 그대로 유지
             result.append((ss, se))
             continue
 
-        # NG가 일부 있지만 threshold 미만 → NG 구간만 잘라내고 조각 유지
-        # speech 구간 내 NG 구간 찾기
         ng_in_range = sorted(
             [(max(ss, ns), min(se, ne)) for ns, ne in ng_spans
              if overlap(ss, se, ns, ne) > 0]
         )
-
-        # NG 구간을 빼고 남은 조각들
         pieces = []
         cur = ss
         for ns, ne in ng_in_range:
@@ -140,23 +105,18 @@ def apply_ng_filter(speech_spans, ng_spans, threshold=NG_REMOVE_THRESHOLD,
         if cur < se - 0.01:
             pieces.append((cur, se))
 
-        # min_residual 이상인 조각만 추가
         for ps, pe in pieces:
             if pe - ps >= min_residual:
                 result.append((ps, pe))
-
     return result
 
 
 # ──────────────────────────────────────────────
-# 개선 2: 갭 병합
+# 갭 병합
 # ──────────────────────────────────────────────
 
 def merge_gaps(spans, gap_sec=MERGE_GAP_SEC, min_dur=MIN_SPEECH_SEC):
-    """
-    인접한 구간 사이 갭이 gap_sec 이하이면 병합.
-    병합 후 min_dur 미만인 구간은 제거.
-    """
+    """인접한 구간 사이 갭이 gap_sec 이하이면 병합. 병합 후 min_dur 미만은 제거."""
     if not spans:
         return []
     spans = sorted(spans)
@@ -170,79 +130,7 @@ def merge_gaps(spans, gap_sec=MERGE_GAP_SEC, min_dur=MIN_SPEECH_SEC):
 
 
 # ──────────────────────────────────────────────
-# 개선 3: 필러 필터 (whisper 전사 기반)
-# ──────────────────────────────────────────────
-
-def build_wav_to_orig_map(speech_spans):
-    """
-    speech_only.wav 오프셋 → 원본 영상 시간 매핑 테이블 구축
-    """
-    table = []
-    acc = 0.0
-    for s, e in sorted(speech_spans):
-        dur = e - s
-        table.append({'orig_s': s, 'orig_e': e, 'wav_s': acc, 'wav_e': acc + dur})
-        acc += dur
-    return table
-
-
-def wav_to_orig(wav_sec, table):
-    """whisper의 wav 오프셋(초) → 원본 영상 시간(초)"""
-    for seg in table:
-        if seg['wav_s'] <= wav_sec <= seg['wav_e'] + 0.01:
-            offset = wav_sec - seg['wav_s']
-            return seg['orig_s'] + offset
-    return None
-
-
-def is_filler(text):
-    """전사 텍스트가 의미 없는 필러인지 판단"""
-    t = text.strip()
-    if len(t) < 2:
-        return True
-    for pat in FILLER_PATTERNS:
-        if re.match(pat, t):
-            return True
-    return False
-
-
-def apply_filler_filter(spans, transcript_data, speech_spans, max_dur=5.0):
-    """
-    whisper 전사에서 필러로 판단된 짧은 구간 제거.
-    max_dur: 이 길이보다 긴 구간은 필러로 처리하지 않음.
-    """
-    if not transcript_data:
-        return spans
-
-    wav_map = build_wav_to_orig_map(speech_spans)
-    transcription = transcript_data.get('transcription', [])
-
-    # 필러로 판단된 원본 구간 수집
-    filler_spans = []
-    for seg in transcription:
-        text = seg.get('text', '').strip()
-        if not is_filler(text):
-            continue
-        ws = seg['offsets']['from'] / 1000.0
-        we = seg['offsets']['to'] / 1000.0
-        if we - ws > max_dur:
-            continue
-        os_ = wav_to_orig(ws, wav_map)
-        oe = wav_to_orig(we, wav_map)
-        if os_ is not None and oe is not None:
-            filler_spans.append((os_, oe))
-
-    if not filler_spans:
-        return spans
-
-    print(f'  [필러 필터] 감지된 필러 구간: {len(filler_spans)}개')
-
-    # 필러 구간 제거 (NG 처리와 동일한 로직, 더 공격적: threshold=0.8)
-    return apply_ng_filter(spans, filler_spans, threshold=0.8, min_residual=0.3)
-
-
-# ──────────────────────────────────────────────
-# [개선 4] 단어 수준 sub-segment 분리
+# 단어 수준 sub-segment 분리 (opt-in)
 # ──────────────────────────────────────────────
 
 def split_segment_by_long_words(segment, abs_threshold=WORD_SPLIT_ABS_SEC,
@@ -251,18 +139,9 @@ def split_segment_by_long_words(segment, abs_threshold=WORD_SPLIT_ABS_SEC,
                                  min_dur=MIN_SPEECH_SEC):
     """Whisper 세그먼트 내 무음 구간을 감지해 sub-segment로 분리.
 
-    Whisper 모델별 무음 표현 방식이 다름:
-      small/medium: 무음 = 직전 단어 duration에 흡수 → 단어 duration 이상값 감지
-      large-v3:     무음 = 단어 사이 gap (word[i].end → word[i+1].start) 으로 표현
-
-    두 패턴 모두 처리:
       [A] 단어 duration > max(abs_threshold, mean × mul_threshold)
-          → group 1: segment.start ~ long_word.start
-          → group 2: long_word.end ~ segment.end  (무음 구간 skip)
-
-      [B] 단어 사이 gap > gap_threshold
-          → group 1: segment.start ~ word[i].end
-          → group 2: word[i+1].start ~ segment.end  (gap skip)
+          → 무음이 단어 duration에 흡수된 것 (small/medium 계열)
+      [B] 단어 사이 gap > gap_threshold → 실제 gap (large-v3 계열)
     """
     words = [w for w in segment.get('words', [])
              if 'start' in w and 'end' in w]
@@ -270,47 +149,37 @@ def split_segment_by_long_words(segment, abs_threshold=WORD_SPLIT_ABS_SEC,
         return [(segment['start'], segment['end'])]
 
     durations = [w['end'] - w['start'] for w in words]
-
-    # [A] duration 기반: 평균 상위 30% outlier 제거 후 임계값 계산
     sorted_d = sorted(durations)
     trimmed = sorted_d[:max(1, int(len(sorted_d) * 0.7))]
     mean_dur = sum(trimmed) / len(trimmed)
     dur_threshold = max(abs_threshold, mean_dur * mul_threshold)
 
-    # 분리점 수집 (마지막 단어 제외)
     split_points = []  # (group1_end, group2_start)
     for i, (w, dur) in enumerate(zip(words[:-1], durations[:-1])):
-        # [A] 단어 duration이 비정상적으로 길면 → 무음이 duration에 흡수된 것
         if dur > dur_threshold:
-            split_points.append((w['start'], w['end']))  # long_word 앞뒤로 분리
+            split_points.append((w['start'], w['end']))
             continue
-        # [B] 다음 단어 시작이 현재 단어 끝보다 훨씬 늦으면 → 사이에 실제 gap 존재
         next_w = words[i + 1]
-        gap = next_w['start'] - w['end']
-        if gap > gap_threshold:
-            split_points.append((w['end'], next_w['start']))  # gap 자체를 skip
+        if next_w['start'] - w['end'] > gap_threshold:
+            split_points.append((w['end'], next_w['start']))
 
     if not split_points:
         return [(segment['start'], segment['end'])]
 
-    # 겹치는 split_points 제거 (정렬 후 이전 group2_start 이후만 허용)
     split_points.sort()
     merged = [split_points[0]]
     for g1e, g2s in split_points[1:]:
-        if g1e >= merged[-1][1]:  # 이전 group2_start 이후에 위치
+        if g1e >= merged[-1][1]:
             merged.append((g1e, g2s))
-    split_points = merged
 
     result = []
     cur_start = segment['start']
-    for group1_end, group2_start in split_points:
+    for group1_end, group2_start in merged:
         if group1_end - cur_start >= min_dur:
             result.append((cur_start, group1_end))
-        cur_start = group2_start  # gap/silence 구간 skip
-
+        cur_start = group2_start
     if segment['end'] - cur_start >= min_dur:
         result.append((cur_start, segment['end']))
-
     return result if result else [(segment['start'], segment['end'])]
 
 
@@ -324,38 +193,19 @@ def build_from_words_json(words_json_path, ng_spans=None, pad=None, pad_end=None
                           word_split=False):
     """faster-whisper words.json 세그먼트를 클립 단위로 변환.
 
-    ffmpeg 발화 구간 대신 Whisper가 인식한 문장 단위를 클립 경계로 사용.
-    → 문장 중간 잘림 원천 차단 (Whisper 세그먼트가 문장 의미 단위로 분리됨)
-    → 문장 사이 침묵은 자동 제거 (취할 구간만 열거하므로)
-    → [개선 4] 세그먼트 내 비정상적으로 긴 단어로 반복 발화 구간 추가 분리
-      (word_split=True로 opt-in. 기본값은 False — 아래 "실전 실패 사례" 참고)
+    문장(세그먼트) 단위를 클립 경계로 쓰므로 문장 중간 잘림이 없고, 문장 사이
+    침묵은 자동 제거된다. 문장 안의 정적은 Claude가 ng_log.json에 찍어 준다
+    (make_transcript.py가 정적을 표시해 준다).
 
-    ⚠ 끝단 패딩(pad_end)이 시작 패딩(pad)보다 넉넉해야 함 (실전 실패 사례):
-      Whisper의 단어 종료 타임스탬프는 실제 발음이 끝나기 살짝 전에 찍히는
-      경향이 있다. 특히 한국어 종결어미("-요", "-다" 등 부드럽게 흐려지는
-      발음)에서 두드러져, 대칭 패딩(예: 양쪽 다 0.05초)을 쓰면 클립마다
-      마지막 음절 꼬리가 매번 잘려나간다. 클립 사이에 크로스페이드 없이
-      하드컷으로 바로 이어붙이는 파이프라인 특성상 이 미세한 손실이 그대로
-      "문장이 잘린다"는 체감으로 이어진다. pad_end 기본값을 pad(시작)보다
-      크게 잡아 이를 보정한다.
-
-    ⚠ word_split=True 주의사항 (실전 실패 사례로 기본값을 False로 변경함):
-      단어 duration/gap을 "무음"으로 해석하는 이 로직은 word-level 타임스탬프가
-      신뢰할 수 있다는 전제에 의존한다. 인식률이 낮은 모델(특히 커뮤니티
-      fine-tune)로 전사하면 실제로는 계속 말하고 있는데도 단어가 드문드문만
-      인식되어, 단어 사이 간격이 전부 "무음"으로 오판되고 그 사이의 실제
-      발화가 통째로 잘려나간다. 결과물은 0.4~1.6초짜리 파편 클립이 수십 개
-      이어지는 형태로 나타나며, 사용자에게는 "편집이 너무 러프하다"로
-      체감된다. 단어 인식 밀도가 낮을 가능성이 있으면(성긴 words.json,
-      비공식 파인튜닝 모델) 반드시 False로 유지할 것.
-
-    words_json: [{"start": float, "end": float, "text": str, "words": [...]}, ...]
+    ⚠ word_split=True 주의 (실전 실패 사례로 기본값 False):
+      단어 인식 밀도가 낮은 모델(커뮤니티 fine-tune 등)에서는 단어 사이 간격이
+      전부 "무음"으로 오판되어 실제 발화가 잘리고 0.4~1.6초짜리 파편 클립이
+      양산된다. word timestamp 신뢰도가 검증된 경우에만 켤 것.
     """
     _pad = pad if pad is not None else WORD_START_PAD_SEC
     _pad_end = pad_end if pad_end is not None else max(_pad, WORD_END_PAD_SEC)
 
-    with open(words_json_path, encoding='utf-8') as f:
-        segments = json.load(f)
+    segments = json.loads(Path(words_json_path).read_text(encoding='utf-8'))
 
     spans = []
     split_count = 0
@@ -366,8 +216,7 @@ def build_from_words_json(words_json_path, ng_spans=None, pad=None, pad_end=None
             sub = split_segment_by_long_words(s, min_dur=min_dur)
             if len(sub) > 1:
                 split_count += 1
-                text_preview = s.get('text', '').strip()[:50]
-                print(f'  [단어분리] {s["start"]:.1f}~{s["end"]:.1f}s → {len(sub)}개 | "{text_preview}"')
+                print(f'  [단어분리] {s["start"]:.1f}~{s["end"]:.1f}s → {len(sub)}개 | "{s.get("text", "").strip()[:50]}"')
         else:
             sub = [(s['start'], s['end'])]
         for ss, se in sub:
@@ -387,93 +236,11 @@ def build_from_words_json(words_json_path, ng_spans=None, pad=None, pad_end=None
     return result
 
 
-# ──────────────────────────────────────────────
-# 메인 파이프라인
-# ──────────────────────────────────────────────
-
-def make_segments(speech_path, ng_path=None, transcript_path=None, out_path=None,
-                  verbose=True, ng_threshold=None, merge_gap=None):
-
-    # 파라미터 적용 (인자로 받으면 전역값 오버라이드)
-    _ng_threshold = ng_threshold if ng_threshold is not None else NG_REMOVE_THRESHOLD
-    _merge_gap    = merge_gap    if merge_gap    is not None else MERGE_GAP_SEC
-
-    def log(msg):
-        if verbose:
-            print(msg)
-
-    # ── 로드 ──
-    with open(speech_path) as f:
-        speech_spans = json.load(f)
-
-    ng_spans = []
-    if ng_path and Path(ng_path).exists():
-        with open(ng_path) as f:
-            ng_data = json.load(f)
-        ng_spans = ng_data['ng_spans']
-        log(f'NG 로그: {len(ng_spans)}개 구간 로드')
-    else:
-        log('NG 로그 없음 → 무음 제거만 적용')
-
-    transcript_data = None
-    if transcript_path and Path(transcript_path).exists():
-        with open(transcript_path) as f:
-            transcript_data = json.load(f)
-
-    # 통계 함수
-    def stats(spans, label):
-        total = sum(e - s for s, e in spans)
-        log(f'  {label}: {len(spans)}개 구간, 총 {total:.0f}초 ({total/60:.1f}분)')
-
-    log('=== 편집 구간 생성 (개선판) ===')
-    log(f'파라미터: NG_THRESHOLD={_ng_threshold:.0%}, MERGE_GAP={_merge_gap}s')
-    log('')
-
-    # ── Step 1: 무음 제거된 발화 구간 ──
-    log('[1단계] 무음 제거 완료된 발화 구간')
-    stats(speech_spans, '발화')
-
-    # ── Step 2: NG 필터 (비율 기반) ──
-    log(f'\n[2단계] NG 필터 (NG 비율 {_ng_threshold:.0%} 이상만 제거)')
-    spans = apply_ng_filter(speech_spans, ng_spans, threshold=_ng_threshold)
-    stats(spans, '처리 후')
-
-    removed_ng = [(ss, se) for ss, se in speech_spans
-                  if ng_ratio(ss, se, ng_spans) >= _ng_threshold]
-    kept_partial_ng = [(ss, se) for ss, se in speech_spans
-                       if 0 < ng_ratio(ss, se, ng_spans) < _ng_threshold]
-    log(f'  → 완전 제거: {len(removed_ng)}개, 부분 NG 유지: {len(kept_partial_ng)}개')
-
-    # ── Step 3: 필러 필터 ──
-    if transcript_data:
-        log('\n[3단계] 필러 필터 (whisper 전사 기반)')
-        prev_count = len(spans)
-        spans = apply_filler_filter(spans, transcript_data, speech_spans)
-        log(f'  → {prev_count}개 → {len(spans)}개 ({prev_count - len(spans)}개 제거)')
-        stats(spans, '처리 후')
-    else:
-        log('\n[3단계] 필러 필터 생략 (transcript 없음)')
-
-    # ── Step 4: 갭 병합 ──
-    log(f'\n[4단계] 갭 병합 ({_merge_gap}초 이하 갭 병합)')
-    spans = merge_gaps(spans, gap_sec=_merge_gap)
-    stats(spans, '병합 후')
-
-    # ── 최종 통계 ──
-    # 원본 길이: speech_spans 마지막 끝 시간 기준 (영상 길이 근사값)
-    orig_dur = max(e for _, e in speech_spans) if speech_spans else 1
-    total = sum(e - s for s, e in spans)
-    log('\n=== 결과 ===')
-    log(f'원본:  {orig_dur/60:.1f}분 (발화 구간 기준)')
-    log(f'결과:  {total/60:.1f}분 ({len(spans)}개 구간, {(1 - total/orig_dur)*100:.0f}% 제거)')
-
-    # ── 저장 ──
-    out = out_path or '/tmp/final_segments.json'
-    with open(out, 'w') as f:
-        json.dump([[s, e] for s, e in spans], f)
-    log(f'\n저장: {out}')
-
-    return spans
+def default_out_path(words_json: Path) -> Path:
+    """<stem>_words.json → <stem>_segments.json (영상 옆에 저장, 영상별로 분리)."""
+    name = words_json.name
+    stem = name[:-len('_words.json')] if name.endswith('_words.json') else words_json.stem
+    return words_json.with_name(stem + '_segments.json')
 
 
 # ──────────────────────────────────────────────
@@ -481,19 +248,15 @@ def make_segments(speech_path, ng_path=None, transcript_path=None, out_path=None
 # ──────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description='CapCut 컷편집 구간 생성 (개선판)')
-    parser.add_argument('--speech', default='/tmp/speech_segments.json',
-                        help='무음 제거된 발화 구간 JSON')
+    parser = argparse.ArgumentParser(description='CapCut 컷편집 구간 생성')
+    parser.add_argument('--words-json', required=True,
+                        help='faster-whisper words.json 경로 (transcribe.py 출력)')
     parser.add_argument('--ng', default=None,
-                        help='NG 로그 JSON (선택)')
-    parser.add_argument('--transcript', default='/tmp/transcript.json',
-                        help='whisper 전사 결과 JSON (선택, whisper.cpp 포맷)')
-    parser.add_argument('--words-json', default=None,
-                        help='faster-whisper words.json 경로 (지정 시 Whisper 세그먼트 기반 모드 — 문장 중간 잘림 방지)')
-    parser.add_argument('--out', default='/tmp/final_segments.json',
-                        help='출력 JSON 경로')
+                        help='NG 로그 JSON {"ng_spans": [[s, e], ...]} (선택)')
+    parser.add_argument('--out', default=None,
+                        help='출력 JSON 경로 (기본: <stem>_segments.json, words.json 옆)')
     parser.add_argument('--ng-threshold', type=float, default=NG_REMOVE_THRESHOLD,
-                        help=f'NG 제거 비율 임계값 (기본: {NG_REMOVE_THRESHOLD})')
+                        help=f'NG 비율이 이 이상이면 문장 통째로 제거 (기본: {NG_REMOVE_THRESHOLD} = 찍은 곳만 자름)')
     parser.add_argument('--merge-gap', type=float, default=MERGE_GAP_SEC,
                         help=f'갭 병합 임계값(초) (기본: {MERGE_GAP_SEC})')
     parser.add_argument('--pad-start', type=float, default=WORD_START_PAD_SEC,
@@ -501,53 +264,34 @@ def main():
     parser.add_argument('--pad-end', type=float, default=WORD_END_PAD_SEC,
                         help=f'클립 끝단 패딩(초) — 종결어미 잘림 방지 (기본: {WORD_END_PAD_SEC})')
     parser.add_argument('--word-split', action='store_true',
-                        help='단어 수준 sub-segment 분리 활성화 (기본: 비활성화). '
-                             '단어 인식 밀도가 낮은 모델에서는 실제 발화까지 무음으로 '
-                             '오판해 파편 클립을 양산할 수 있으니, word timestamp 신뢰도가 '
-                             '검증된 경우에만 켤 것')
-    parser.add_argument('--no-word-split', action='store_true',
-                        help='(하위 호환용, 기본 동작과 동일 — 이제 아무 효과 없음)')
+                        help='단어 수준 sub-segment 분리 활성화 (기본: 비활성화, 위험성은 docstring 참고)')
     args = parser.parse_args()
 
-    # Whisper 세그먼트 기반 모드 (--words-json 지정 시)
-    if args.words_json and Path(args.words_json).exists():
-        print('=== Whisper 세그먼트 기반 클립 생성 ===')
-        print(f'  words.json: {args.words_json}')
-        print(f'  파라미터: NG_THRESHOLD={args.ng_threshold:.0%}, MERGE_GAP={args.merge_gap}s')
+    words_json = Path(args.words_json)
+    if not words_json.exists():
+        raise SystemExit(f'❌ words.json 없음: {words_json}')
 
-        # NG 스팬 로드
-        ng_spans = []
-        if args.ng and Path(args.ng).exists():
-            with open(args.ng) as f:
-                ng_data = json.load(f)
-            ng_spans = ng_data['ng_spans']
-            print(f'  NG 로그: {len(ng_spans)}개 구간')
+    ng_spans = []
+    if args.ng and Path(args.ng).exists():
+        ng_spans = json.loads(Path(args.ng).read_text(encoding='utf-8'))['ng_spans']
+        print(f'  NG 로그: {len(ng_spans)}개 구간 ({args.ng})')
+    elif args.ng:
+        print(f'  ⚠ NG 로그 없음 ({args.ng}) → 문장 사이 침묵만 제거')
 
-        spans = build_from_words_json(
-            args.words_json,
-            ng_spans=ng_spans,
-            pad=args.pad_start,
-            pad_end=args.pad_end,
-            merge_gap=args.merge_gap,
-            min_dur=0.3,
-            ng_threshold=args.ng_threshold,
-            word_split=args.word_split,
-        )
+    print('=== Whisper 세그먼트 기반 클립 생성 ===')
+    print(f'  words.json: {words_json}')
+    print(f'  파라미터: NG_THRESHOLD={args.ng_threshold:.0%}, MERGE_GAP={args.merge_gap}s')
 
-        with open(args.out, 'w') as f:
-            json.dump([[s, e] for s, e in spans], f)
-        print(f'\n저장: {args.out}')
+    spans = build_from_words_json(
+        words_json, ng_spans=ng_spans,
+        pad=args.pad_start, pad_end=args.pad_end,
+        merge_gap=args.merge_gap, min_dur=MIN_SPEECH_SEC,
+        ng_threshold=args.ng_threshold, word_split=args.word_split,
+    )
 
-    else:
-        # 기존 ffmpeg speech 기반 모드 (하위 호환)
-        make_segments(
-            speech_path=args.speech,
-            ng_path=args.ng,
-            transcript_path=args.transcript,
-            out_path=args.out,
-            ng_threshold=args.ng_threshold,
-            merge_gap=args.merge_gap,
-        )
+    out = Path(args.out) if args.out else default_out_path(words_json)
+    out.write_text(json.dumps([[s, e] for s, e in spans]), encoding='utf-8')
+    print(f'\n저장: {out}')
 
 
 if __name__ == '__main__':

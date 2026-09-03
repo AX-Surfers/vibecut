@@ -1,12 +1,12 @@
 ---
 name: vibecut-auto-edit
-version: 0.7.0
+version: 0.9.0
 description: |
-  Whisper 전사 → Claude가 transcript 직접 분석 → NG 구간 제거(사용자 사전 검토 포함) →
-  CapCut 적용 → 자막까지 자동 연결.
-  Jaccard/키워드 방식 대신 Claude가 텍스트를 읽고 반복·실수·불완전 발화를 직접 판단.
-  강의형 콘텐츠의 "강조용 의도적 반복"을 실수로 오판해 과잉 삭제하는 문제를 막기 위해
-  컷 적용 전 번호 리스트로 NG 후보를 보여주고 승인/제외를 받는다.
+  Whisper 전사 → 정적 표시된 transcript를 Claude가 직접 읽고 NG 판단 → 사용자 검토 →
+  CapCut 컷 적용 → 자막까지 자동 연결. 영상이 들어 있는 CapCut 프로젝트·타임라인을
+  자동으로 찾고, 타임라인이 여러 개인 프로젝트와 영상 여러 개도 처리한다.
+  강의형 콘텐츠의 "강조용 의도적 반복"을 실수로 오판하지 않도록 컷 적용 전
+  번호 리스트로 NG 후보를 보여주고 승인/제외를 받는다.
   트리거: "무음 제거", "컷편집", "캡컷 편집", "NG 제거", "/vibecut-auto-edit"
 metadata:
   category: video
@@ -16,49 +16,40 @@ allowed-tools:
   - Read
   - Write
   - AskUserQuestion
+  - Agent
 ---
 
 # vibecut-auto-edit 스킬
 
-**영상 → Whisper 전사 → Claude transcript 분석 → NG 제거 → CapCut 적용** 파이프라인.
+**영상 → Whisper 전사 → 정적 표시 transcript → Claude NG 판단 → 사용자 검토 → CapCut 적용 → 자막** 파이프라인.
 
 ## 핵심 원리
 
-Whisper가 전사한 단어 타임스탬프를 **Claude가 직접 읽고** NG 구간을 판단합니다.
+Whisper가 전사한 단어 타임스탬프와 실제 오디오의 정적 구간을 함께 펼친 transcript를
+**Claude가 직접 읽고** NG 구간을 판단합니다.
 
-- **기존 방식의 한계**: Jaccard는 인접 세그먼트 간 유사도만 비교 → 문장 *내부* 반복, 3~4회에 걸친 점진적 반복, 불완전 발화를 못 잡음
-- **새 방식**: Claude가 전체 텍스트 흐름을 읽고 맥락 기반으로 판단 → 놓치는 NG 없음
+- 키워드/유사도 방식은 문장 *내부* 반복, 3~4회에 걸친 점진적 반복, 불완전 발화를 못 잡음
+- Whisper 대본만 읽으면 **말이 멈춘 정적**을 못 봄 — Whisper가 멈춘 시간을 앞 단어 길이에
+  흡수시키기 때문. 그래서 `make_transcript.py`가 ffmpeg로 정적을 재서 `⏸` 표시를 끼워 넣음
 
-## 핵심 처리 흐름
+## 처리 흐름
 
 ```
-영상 (.mov/.mp4)
-   │
-   ├─ [0] Whisper 모델 결정 (large-v3-turbo 고정, 질문 생략)
-   │
-   ├─ [1] Whisper 전사
-   │        ↓ {stem}_words.json (단어 타임스탬프 포함)
-   │
-   ├─ [2] Transcript 생성 + Claude NG 분석
-   │        words.json → [시간] 텍스트 형식으로 변환
-   │        Claude가 직접 읽고 NG 구간 특정
-   │        ↓ /tmp/ng_log.json
-   │
-   ├─ [2-D] 사용자 사전 검토 ★신규
-   │        NG 후보를 번호 리스트로 제시 → 자유 텍스트로 승인/제외
-   │        ↓ /tmp/ng_log.json (필터링 반영)
-   │
-   ├─ [3] 클립 구간 생성 (make_segments.py)
-   │        ↓ /tmp/final_segments.json
-   │
-   ├─ [4] CapCut JSON 적용 (capcut_editor.py)
-   │        ↓ 4개 파일 동시 갱신 + .locked 삭제
-   │
-   └─ [5] 자막 자동 연결 ★신규
-            vibecut-add-subtitles(모드 B)를 이어서 호출, words.json 캐시 재사용
+영상 (.mov/.mp4)                     ※ 모든 중간 파일은 영상 옆에 {stem}_*.json 으로 저장
+   │                                   (영상이 여러 개여도 섞이지 않고, 캐시 재사용도 안전)
+   ├─ [0] 프로젝트·타임라인 찾기 (find_project.py) — 사용자에게 묻지 않고 자동 탐색
+   ├─ [1] transcribe.py            → {stem}_words.json
+   ├─ [2] make_transcript.py       → {stem}_transcript.txt (⏸ 정적 / 🔊 인식 안 된 소리 표시)
+   │      Claude가 읽고 NG 판단   → {stem}_ng_log.json
+   ├─ [2-D] 사용자 사전 검토        번호 리스트 → 승인/제외 반영
+   ├─ [3] make_segments.py         → {stem}_segments.json
+   ├─ [3-B] 프로젝트 상태 점검
+   ├─ [4] capcut_editor.py --timeline <이름>   4개 파일 갱신 + 자동 백업
+   ├─ [5] 자막 자동 연결            subtitles_from_cuts.py → 분할 → apply_subtitles.py
+   └─ [6] vibecut app으로 열기
 ```
 
-## 전제 조건
+## 전제 조건 (모든 Bash 블록 앞에 한 번)
 
 ```bash
 which uv || curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -87,484 +78,308 @@ uv run "${SCRIPTS}/_platform.py" quit-capcut
 
 ## 실행 흐름
 
-### 단계 0: Whisper 모델 결정
+### 단계 0: CapCut 프로젝트·타임라인 찾기
 
-기본값을 **`large-v3-turbo`로 고정**하고 질문 없이 바로 진행합니다. large-v3 대비
-6배 빠르면서 정확도는 거의 동일해 전문 용어가 섞인 강의형 콘텐츠에도 충분합니다.
+사용자가 프로젝트 이름을 말하지 않았으면 **묻지 말고 먼저 찾습니다.** 영상 파일명으로
+모든 프로젝트의 소재를 대조합니다.
 
 ```bash
-WHISPER_MODEL="large-v3-turbo"
+VIDEO="<영상 파일 경로>"
+uv run "${SCRIPTS}/find_project.py" "${VIDEO}"
+# 출력: <프로젝트 경로>\t<타임라인 이름>\t<타임라인 id>  (최근 수정 순)
 ```
 
-사용자가 이번 실행만 다른 모델을 명시적으로 요청하면(예: "이번엔 large로 해줘",
-"small로 빠르게") 그 값을 대신 사용합니다. `{stem}_words.json` 캐시가 있으면
-이 단계 자체를 건너뜁니다.
+- 1곳이면 그대로 `PROJECT`, `TIMELINE`으로 씁니다.
+- 여러 곳이면 가장 최근 것을 제안하며 사용자에게 확인합니다.
+- 0곳이면 CapCut에서 영상을 먼저 가져오도록 안내합니다 (미디어 가져오기는 GUI 작업이라 자동화하지 않음).
+- 사용자가 "0903 프로젝트"처럼 이름을 주면 `uv run "${SCRIPTS}/find_project.py" --recent 10`으로 경로와 타임라인 목록을 확인합니다.
 
-⚠ **커뮤니티 한국어 fine-tune 모델은 기본 옵션으로 제시하지 않습니다.**
-과거 실전에서 두 개의 한국어 특화 모델이 모두 문제를 일으켰습니다:
-- `ghost613/faster-whisper-large-v3-turbo-korean` — 52분 영상 중 51분을 통째로
-  누락 (긴 오디오에서 디코딩 실패)
-- `seastar105/whisper-medium-komixv2` — 문장은 인식하지만 단어 밀도가 낮아
-  `make_segments.py`의 word-split 로직과 결합하면 실제 발화까지 무음으로
-  오판해 파편 클립 양산 (→ `make_segments.py` 기본값이 `word_split=False`로
-  바뀌어 이 위험은 완화되었지만, 모델 자체의 낮은 인식률 문제는 여전함)
+```bash
+PROJECT="<CapCut 프로젝트 경로>"
+TIMELINE="<타임라인 이름>"   # 예: "타임라인 01". 타임라인이 1개면 빈 문자열
+TL_OPT=(); [ -n "${TIMELINE}" ] && TL_OPT=(--timeline "${TIMELINE}")
+```
 
-사용자가 특정 한국어 파인튜닝 모델을 명시적으로 요청하면:
-1. `curl -s -o /dev/null -w "%{http_code}"  https://huggingface.co/<repo>` 로
-   실제 존재하는지 먼저 확인 (모델명을 지어내거나 추측하지 말 것)
-2. CTranslate2 형식이 아니면(`library_name: transformers`) 로컬 변환 필요:
-   `uv run --with ctranslate2 --with "transformers[sentencepiece]" --with torch
-   ct2-transformers-converter --model <repo> --output_dir <dir> --quantization int8`
-3. 변환/전사 후 **words.json의 세그먼트 수와 단어 밀도를 확인** — 영상 길이
-   대비 세그먼트가 지나치게 적으면(예: 50분 영상에 30개 미만) 긴 구간을
-   통째로 누락했을 가능성이 높으므로 즉시 사용자에게 알리고 검증 없이
-   진행하지 말 것
+**타임라인이 여러 개인 프로젝트**(CapCut 하단 탭 "타임라인 01/02")는 타임라인마다 영상이
+다릅니다. 각 타임라인 = 별개의 편집 작업이므로 아래 단계 1~5를 **타임라인별로 반복**합니다.
+`--timeline`을 빼면 스크립트가 목록을 보여주고 멈추므로, 엉뚱한 타임라인을 편집할 일은 없습니다.
 
 ### 단계 1: Whisper 전사
 
-`{stem}_words.json` 캐시가 있으면 이 단계를 **건너뜁니다**.
-
 ```bash
-# scripts 경로 결정
-VIBECUT_CONFIG="${HOME}/.vibecut/config.json"
-SCRIPTS=""
-if [ -f "${VIBECUT_CONFIG}" ]; then
-  SCRIPTS=$(python3 -c "import json; print(json.load(open('${VIBECUT_CONFIG}')).get('scripts_dir',''))" 2>/dev/null)
-fi
-if [ -z "${SCRIPTS}" ]; then
-  SCRIPTS=$(find "${HOME}/.claude/plugins/cache/vibecut" -name "capcut_editor.py" -maxdepth 8 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
-fi
-if [ -z "${SCRIPTS}" ]; then
-  APP_DIR="${HOME}/.vibecut/app"
-  if [ -d "${APP_DIR}/.git" ]; then
-    git -C "${APP_DIR}" pull --ff-only >/dev/null 2>&1
-  else
-    git clone --depth 1 https://github.com/AX-Surfers/Vibecut.git "${APP_DIR}" >/dev/null 2>&1
-  fi
-  [ -f "${APP_DIR}/scripts/capcut_editor.py" ] && SCRIPTS="${APP_DIR}/scripts"
-fi
-if [ -z "${SCRIPTS}" ]; then
-  echo "❌ vibecut 스크립트를 찾을 수 없습니다. '/vibecut-setup'을 먼저 실행해주세요."
-  exit 1
-fi
-
-VIDEO="<영상 파일 경로>"
-WORDS_JSON="${VIDEO%.*}_words.json"
-
-# 전사 실행 (ng 감지 결과는 무시, words.json만 사용)
-uv run "${SCRIPTS}/detect_ng.py" "${VIDEO}" \
-  --model "${WHISPER_MODEL}" \
-  --out /tmp/_ng_unused.json
+WHISPER_MODEL="large-v3-turbo"      # 기본 고정, 질문 생략. 사용자가 이번만 다른 모델을 말하면 그 값
+STEM="${VIDEO%.*}"
+uv run "${SCRIPTS}/transcribe.py" "${VIDEO}" --model "${WHISPER_MODEL}"
+# → {STEM}_words.json (있으면 재사용), {STEM}_audio.wav
 ```
 
-### 단계 2: Transcript 생성 + Claude NG 분석
+출력 끝의 `⚠` 줄을 읽습니다 — "N초 동안 인식된 말이 없음", "분당 단어 수 30개 미만"이 뜨면
+모델이 구간을 통째로 놓친 것일 수 있으니 사용자에게 알리고 진행 여부를 확인합니다.
 
-#### 2-A: 읽기 쉬운 transcript 생성
+⚠ **커뮤니티 한국어 fine-tune 모델은 기본으로 쓰지 않습니다.** 실전에서
+`ghost613/faster-whisper-large-v3-turbo-korean`은 52분 중 51분을 통째로 누락했고,
+`seastar105/whisper-medium-komixv2`는 단어 밀도가 낮아 파편 클립을 양산했습니다.
+사용자가 명시적으로 요청하면: (1) `curl -s -o /dev/null -w "%{http_code}" https://huggingface.co/<repo>`로
+존재 확인 (모델명을 지어내지 말 것), (2) CTranslate2 형식이 아니면
+`uv run --with ctranslate2 --with "transformers[sentencepiece]" --with torch ct2-transformers-converter --model <repo> --output_dir <dir> --quantization int8`,
+(3) 전사 후 위 `⚠` 점검을 반드시 통과시킬 것.
 
-Whisper 세그먼트를 침묵 기반으로 세분화합니다 — 각 항목 = 한 번의 시도(take).
-이 덕분에 Claude가 세그먼트 내부 반복까지 취로 감지합니다.
+### 단계 2: transcript 생성 + Claude NG 분석
+
+#### 2-A: 정적이 표시된 transcript
 
 ```bash
-python3 - <<'PYEOF'
-import json
-
-def split_seg(seg):
-    """단어 간 침묵/긴 duration으로 세분화 (Vrew 방식)."""
-    words = [w for w in seg.get('words', []) if 'start' in w and 'end' in w]
-    if len(words) < 3:
-        return [(seg['start'], seg['end'], seg['text'].strip())]
-
-    durs = [w['end'] - w['start'] for w in words]
-    sorted_d = sorted(durs)
-    trimmed = sorted_d[:max(1, int(len(sorted_d) * 0.7))]
-    mean_d = sum(trimmed) / len(trimmed)
-    dur_thr = max(2.5, mean_d * 3.0)
-
-    cut_after = set()
-    for i in range(len(words) - 1):
-        if durs[i] > dur_thr or words[i+1]['start'] - words[i]['end'] > 1.5:
-            cut_after.add(i)
-
-    if not cut_after:
-        return [(seg['start'], seg['end'], seg['text'].strip())]
-
-    groups, cur = [], []
-    for i, w in enumerate(words):
-        cur.append(w)
-        if i in cut_after:
-            text = ''.join(x['word'] for x in cur).strip()
-            if cur[-1]['end'] - cur[0]['start'] >= 0.3:
-                groups.append((cur[0]['start'], cur[-1]['end'], text))
-            cur = []
-    if cur:
-        text = ''.join(x['word'] for x in cur).strip()
-        if cur[-1]['end'] - cur[0]['start'] >= 0.3:
-            groups.append((cur[0]['start'], cur[-1]['end'], text))
-
-    return groups if groups else [(seg['start'], seg['end'], seg['text'].strip())]
-
-words_path = "${WORDS_JSON}"
-segs = json.loads(open(words_path).read())
-
-lines = []
-sub_count = 0
-for seg in segs:
-    subs = split_seg(seg)
-    sub_count += len(subs)
-    for ss, se, text in subs:
-        m, s = divmod(int(ss), 60)
-        lines.append(f"[{m:02d}:{s:02d} ({ss:.1f}~{se:.1f}s)] {text}")
-
-transcript = '\n'.join(lines)
-open("/tmp/transcript.txt", "w").write(transcript)
-print(f"원본 세그먼트: {len(segs)}개 → 분할 후: {sub_count}개 (Vrew 방식)")
-print(transcript[:3000])
-PYEOF
+uv run "${SCRIPTS}/make_transcript.py" "${STEM}_words.json"
+# → {STEM}_transcript.txt 저장 + 화면 출력
 ```
+
+출력 형식 — 각 줄 = 한 번의 시도(take), 정적은 별도 줄:
+
+```
+[00:36 (36.4~38.9s)] 개발자 멘토가 옆에서 직접 봐드립니다
+[00:38 (38.9~39.0s)] 한
+    ⏸ 정적 4.1초 (39.0~43.1s)
+[00:43 (43.2~45.7s)] 달 20시간의 과정을 마치고 나면
+    🔊 인식 안 된 소리 22.9초 (25.0~48.0s) — 정적 아님, NG 잡담일 수 있음
+```
+
+- `⏸ 정적` — 실제 오디오가 조용한 구간. 1초 이상이면 대개 NG(말 멈춤·호흡)입니다.
+- `🔊 인식 안 된 소리` — 소리는 있는데 Whisper가 글자로 못 옮긴 구간. 실전에서 이 자리에
+  "다시 처음부터 할게요" 같은 NG 잡담이 있었습니다. 앞뒤 문맥으로 NG인지 판단하고,
+  애매하면 사용자에게 그 구간을 확인 요청합니다.
 
 #### 2-B: Claude가 transcript 전체를 읽고 NG 판단
 
-`/tmp/transcript.txt`를 **전체 읽은 후** 아래 기준으로 NG 구간을 판단합니다.
-
-> 각 줄 = 한 번의 시도(take). 타임스탬프 형식: `[MM:SS (시작~끝s)]`
-> word-split으로 세분화했으므로 같은 내용의 복수 시도가 별도 줄로 보입니다.
-
-**NG 판단 기준:**
+`{STEM}_transcript.txt`를 **전체 읽은 후** 판단합니다.
 
 | 패턴 | 예시 | 판단 방법 |
 |------|------|----------|
 | 복수 시도 | 인접 줄이 같거나 비슷한 내용 | 마지막 시도만 남기고 앞의 것 모두 NG |
-| 명시적 NG 신호 | "잠깐", "다시", "아니", "죄송" | 해당 줄 + 직전 줄까지 NG |
+| 명시적 NG 신호 | "잠깐", "다시", "아니", "죄송", 카메라/스태프에게 하는 말 | 해당 줄 + 직전 줄까지 NG |
 | 불완전 발화 | 문장이 중간에 끊기고 재시작 | 짧고 의미 없는 단편 줄 |
-| 급정지 후 재시작 | 직전 줄이 짧고 이후 유사 내용 등장 | 직전 줄을 NG |
+| 정적 | `⏸` 1초 이상 | 정적 구간 자체를 NG (앞뒤 말은 살림) |
+| 인식 안 된 소리 | `🔊` | 문맥상 NG 잡담이면 NG, 애매하면 사용자 확인 |
 
-**NG 구간 확장 규칙:**
-- NG 신호어("다시", "잠깐")가 있으면 **신호어 이전** 발화까지 포함 (신호어가 지칭하는 NG 구간)
-- 복수 시도 패턴은 **마지막 시도만 남기고** 나머지 모두 NG
-- 불완전 발화는 **그 세그먼트 전체**를 NG
+- NG 신호어("다시", "잠깐")가 있으면 **신호어 이전** 발화까지 포함
+- 복수 시도는 **마지막 시도만** 남김 (강의형 콘텐츠의 의도적 강조 반복은 2-D에서 사용자가 걸러줌)
+- 정적 NG의 경계는 `⏸` 줄의 시각을 그대로 씁니다 — 앞 단어 끝을 잘라먹지 않습니다
 
 #### 2-C: ng_log.json 작성
 
-분석 후 아래 형식으로 저장합니다.
-
-```python
-import json
-
+```bash
+uv run python - "${STEM}_ng_log.json" <<'PYEOF'
+import json, sys
 ng_spans = [
-    # [시작_초, 끝_초] — words.json의 start/end 값 기준
-    # 예: [17.0, 65.2],  # "최근에 엄청난 최근에..." 반복 구간
-    # 예: [180.6, 197.5], # "브라우저 AI" 3번 시도 구간
+    # [시작_초, 끝_초] — transcript의 시각 기준
+    # 예: [29.6, 33.8],   # "설명하고 눈 괜찮았어요?" 촬영 중 딴소리
+    # 예: [39.0, 43.1],   # "한" 뒤 정적 4.1초
 ]
-
-json.dump({"ng_spans": ng_spans}, open("/tmp/ng_log.json", "w"),
-          ensure_ascii=False, indent=2)
-print(f"NG 구간: {len(ng_spans)}개, 총 {sum(e-s for s,e in ng_spans):.1f}초")
+json.dump({"ng_spans": ng_spans}, open(sys.argv[1], "w"), ensure_ascii=False, indent=2)
+print(f"NG 구간: {len(ng_spans)}개, 총 {sum(e-s for s,e in ng_spans):.1f}초 → {sys.argv[1]}")
+PYEOF
 ```
 
-분석 결과를 요약해서 보고합니다:
-```
-NG 분석 완료:
-  - 문장 내 반복: N개
-  - 복수 시도:   N개
-  - 명시적 신호: N개
-  - 불완전 발화: N개
-  총 NG: N개 구간 / XX초
-```
+> heredoc은 `<<'PYEOF'`(따옴표)라 안에서 `${STEM}`이 안 풀립니다. 경로는 위처럼
+> **인자로 넘기세요.** (예전 스킬은 이 실수로 파일 없음 오류가 났습니다)
 
 ### 단계 2-D: 사용자 사전 검토 (컷 적용 전 필수)
 
-강의형 콘텐츠는 강조를 위해 같은 말을 의도적으로 반복하는 경우가 많아, "복수 시도"
-판정이 실제 실수가 아닌 의도적 반복을 잘라내는 오탐(과잉 삭제)을 낼 수 있습니다.
-**컷을 실제로 적용하기 전에** `/tmp/ng_log.json`의 각 구간을 번호 리스트로 제시하고
-사용자의 자유 텍스트 승인/제외를 받습니다. 영상 전체를 재생해 확인하는 것보다
-텍스트 리스트만 훑는 게 훨씬 빠르므로, 이 단계는 생략하지 않습니다.
+강의형 콘텐츠는 강조를 위해 같은 말을 일부러 반복하는 경우가 많아, "복수 시도" 판정이
+의도적 반복을 잘라내는 오탐을 낼 수 있습니다. **컷 적용 전에** 번호 리스트로 보여주고
+승인/제외를 받습니다. 이 단계는 생략하지 않습니다.
 
-```python
-import json, re
-
-transcript = open("/tmp/transcript.txt", encoding="utf-8").read().splitlines()
-ng = json.load(open("/tmp/ng_log.json", encoding="utf-8"))
-spans = ng["ng_spans"]
-
-line_re = re.compile(r"\((\d+\.?\d*)~(\d+\.?\d*)s\)\]\s*(.*)")
-parsed = []
-for line in transcript:
-    m = line_re.search(line)
-    if m:
-        parsed.append((float(m.group(1)), float(m.group(2)), m.group(3)))
-
-def context_for(span):
-    s, e = span
-    hit = [text for ls, le, text in parsed if ls < e and le > s]
-    return " / ".join(hit)[:80] or "(텍스트 없음)"
-
-for i, span in enumerate(spans, 1):
-    s, e = span
+```bash
+uv run python - "${STEM}_transcript.txt" "${STEM}_ng_log.json" <<'PYEOF'
+import json, re, sys
+lines = open(sys.argv[1], encoding="utf-8").read().splitlines()
+spans = json.load(open(sys.argv[2], encoding="utf-8"))["ng_spans"]
+rx = re.compile(r"\((\d+\.?\d*)~(\d+\.?\d*)s\)\]?\s*(.*)")
+parsed = [(float(m.group(1)), float(m.group(2)), m.group(3)) for m in map(rx.search, lines) if m]
+for i, (s, e) in enumerate(spans, 1):
+    hit = " / ".join(t for ls, le, t in parsed if ls < e and le > s)[:80] or "(정적)"
     m, sec = divmod(int(s), 60)
-    print(f"[{i}] {m:02d}:{sec:02d} ({e-s:.1f}초) — \"{context_for(span)}\"")
+    print(f"[{i}] {m:02d}:{sec:02d} ({e-s:.1f}초) — \"{hit}\"")
+PYEOF
 ```
 
-리스트를 출력한 뒤 사용자에게 묻습니다:
-
-```
-위 N개 구간을 NG로 판단했습니다. 전체 적용해도 될까요?
-(예: "전체 적용" / "2, 7번 빼고 적용" / "1번만 남기고 나머지 빼줘")
-```
-
-**사용자의 자유 텍스트 답변을 받아** 제외 지시된 번호를 `spans`에서 제거한 뒤
-`/tmp/ng_log.json`을 다시 씁니다:
+리스트를 보여준 뒤 `AskUserQuestion`으로 묻습니다:
 
 ```python
-# excluded = 사용자가 제외를 요청한 번호 목록 (1-based), 예: [2, 7]
-kept = [span for i, span in enumerate(spans, 1) if i not in excluded]
-json.dump({"ng_spans": kept}, open("/tmp/ng_log.json", "w"),
-          ensure_ascii=False, indent=2)
-print(f"검토 반영: {len(spans)}개 → {len(kept)}개 적용")
+AskUserQuestion(questions=[{
+    "question": "위 N개 구간을 NG로 판단했습니다. 어떻게 할까요? (일부만 빼려면 '기타'에 번호를: 예 '2, 7번 빼고')",
+    "header": "NG 검토",
+    "multiSelect": False,
+    "options": [
+        {"label": "전체 적용 (Recommended)", "description": "N개 구간을 모두 잘라냅니다"},
+        {"label": "다시 분석", "description": "놓친 곳이나 잘못 잡은 곳을 알려주시면 재분석합니다"},
+    ],
+}])
 ```
 
-사용자가 "전체 적용"이라고 답하면 필터링 없이 그대로 진행합니다.
+제외 번호를 받으면 `spans`에서 빼고 `{STEM}_ng_log.json`을 다시 씁니다. "다시 분석"이면
+사용자 피드백을 반영해 2-B부터 다시 합니다.
 
 ### 단계 3: 클립 구간 생성
 
 ```bash
-uv run "${SCRIPTS}/make_segments.py" \
-  --words-json "${WORDS_JSON}" \
-  --ng /tmp/ng_log.json \
-  --out /tmp/final_segments.json
+uv run "${SCRIPTS}/make_segments.py" --words-json "${STEM}_words.json" --ng "${STEM}_ng_log.json"
+# → {STEM}_segments.json
 ```
 
-기본값은 Whisper 세그먼트(문장) 전체를 클립 경계로 사용하며, 세그먼트 내부를
-단어 단위로 더 잘게 쪼개지 않는다 (`word_split=False`가 기본). 문장이 중간에
-끊기지 않아야 한다는 원칙을 지키기 위함이다. word-level 타임스탬프가
-검증된 모델(공식 large-v3 등)에서 세그먼트 내부의 긴 무음까지 추가로
-제거하고 싶다면 `--word-split`을 명시적으로 붙인다 — 단, 단어 인식 밀도가
-낮으면 실제 발화까지 무음으로 오판해 0.4~1.6초짜리 파편 클립이 양산될 수
-있으니(실전에서 확인된 실패 사례) 결과를 반드시 클립 길이 분포로 확인할 것.
-
-⚠ **클립 끝단이 종결어미("-요", "-다" 등)를 잘라먹는 문제 (실전 실패 사례):**
-Whisper의 단어 종료 타임스탬프는 실제 발음이 끝나기 살짝 전에 찍히는 경향이
-있다. 크로스페이드 없이 하드컷으로 바로 이어붙이는 파이프라인 특성상 이
-미세한 손실이 "문장이 잘린다"는 체감으로 이어진다. 이를 보정하기 위해 클립
-끝 패딩을 시작 패딩보다 넉넉하게(`WORD_END_PAD_SEC = 0.2`초) 잡는 것이
-기본값이다. 그래도 잘림이 느껴지면 `--pad-end 0.3` 등으로 더 늘릴 수 있다.
-
-⚠ **클립 시작단이 앞글자를 잘라먹는 문제 (실전 실패 사례):**
-Whisper의 단어 시작 타임스탬프도 종료 타임스탬프와 마찬가지로 실제 발음
-시작보다 살짝 늦게 찍히는 경향이 있어, 자음이나 앞음절이 잘려나간다
-(예: "지도만"의 "지"가 잘려 "도만"으로 들림). 기존 시작 패딩 0.05초는
-이를 방지하기에 부족했으므로 `WORD_START_PAD_SEC = 0.12`초로 상향했다.
-그래도 앞글자가 잘리면 `--pad-start 0.18` 등으로 더 늘릴 수 있다 — 단,
-너무 크게 잡으면 직전 클립의 꼬리(이미 pad_end로 보정됨)와 겹쳐 말이
-중복 재생될 수 있으니 끝단 패딩보다는 작게 유지할 것.
+- Whisper 세그먼트(문장) 전체를 클립 경계로 쓰고, NG로 찍은 곳만 정확히 잘라냅니다.
+  (예전 "NG가 문장의 50% 이상이면 문장을 통째로 버림" 규칙은 살려야 할 재녹음 테이크까지
+  날려서 제거됨 — 기본 임계값 100%)
+- 클립 시작 패딩 0.12초, 끝 패딩 0.2초 기본. 앞글자/종결어미가 잘리면 `--pad-start 0.18`,
+  `--pad-end 0.3`으로 조정. 시작 패딩은 끝 패딩보다 작게 유지(직전 클립 꼬리와 겹치면 말이 중복됨).
+- `--word-split`은 단어 인식 밀도가 검증된 경우에만 (파편 클립 양산 실패 사례 있음).
 
 ### 단계 3-B: 적용 전 프로젝트 상태 점검 (필수)
 
-컷을 적용하면 대상 트랙의 세그먼트가 **통째로 교체**된다. 잘못된 트랙을 잡으면
-되돌리기 어려우므로, 적용 직전에 현재 프로젝트 구성을 눈으로 확인한다.
+컷을 적용하면 대상 트랙의 세그먼트가 **통째로 교체**됩니다. 적용 직전에 현재 구성을 확인합니다.
 
 ```bash
-PROJECT="<CapCut 프로젝트 경로>"
-python3 - <<PYEOF
-import json
+uv run python - "${PROJECT}" "${TIMELINE}" "${SCRIPTS}" <<'PYEOF'
+import json, sys
 from collections import Counter
-d = json.load(open("${PROJECT}/draft_info.json"))
-mats = {m['id']: m.get('path','') for m in d['materials'].get('videos', [])}
+from pathlib import Path
+project, timeline, scripts = sys.argv[1:4]
+sys.path.insert(0, scripts)
+from capcut_editor import draft_path_for, resolve_timeline
+proj = Path(project)
+tl, _ = resolve_timeline(proj, timeline or None)
+d = json.loads(draft_path_for(proj, tl).read_text(encoding="utf-8"))
+mats = {m["id"]: m.get("path", "") for m in d["materials"].get("videos", [])}
 print(f"전체 길이: {d['duration']/1e6:.1f}초")
-for i, t in enumerate(d['tracks']):
-    names = Counter(mats.get(s.get('material_id'),'?').split('/')[-1]
-                    for s in t.get('segments', []))
-    print(f"  tracks[{i}] {t['type']}: {len(t.get('segments',[]))}개 {dict(names)}")
+for i, t in enumerate(d["tracks"]):
+    names = Counter(Path(mats.get(s.get("material_id"), "?")).name for s in t.get("segments", []))
+    print(f"  tracks[{i}] {t['type']} '{t.get('name', '')}': {len(t.get('segments', []))}개 {dict(names)}")
 PYEOF
 ```
 
-확인 항목:
-- **비디오 트랙이 2개 이상**이면 어느 쪽이 원본 영상인지 확인한다. 배경 이미지나
-  오버레이가 올라가 있으면 `--track N`으로 대상을 명시하거나, 먼저 그 트랙을
-  타임라인에서 빼고 진행한다.
-- **세그먼트 수·전체 길이가 예상과 다르면** 그 사이 사용자가 CapCut에서 편집했거나
-  이전 작업이 꼬인 것이다. 덮어쓰기 전에 사용자에게 확인한다.
+- **비디오 트랙이 2개 이상**이면 어느 쪽이 원본 영상인지 확인합니다. 배경 이미지·오버레이가
+  올라가 있으면 `--track N`으로 대상을 명시합니다.
+- **세그먼트 수·전체 길이가 예상과 다르면** 그 사이 사용자가 편집했거나 이전 작업이 꼬인 것
+  입니다. 덮어쓰기 전에 사용자에게 확인합니다.
 
 ### 단계 4: CapCut JSON 적용
 
 ```bash
-PROJECT="<CapCut 프로젝트 경로>"
-
-uv run "${SCRIPTS}/capcut_editor.py" /tmp/final_segments.json \
-  --project "${PROJECT}"
+uv run "${SCRIPTS}/_platform.py" quit-capcut
+uv run "${SCRIPTS}/capcut_editor.py" "${STEM}_segments.json" --project "${PROJECT}" "${TL_OPT[@]}"
 ```
 
-⚠ **엉뚱한 트랙을 편집하는 사고 (실전 실패 사례):**
-`capcut_editor.py`는 예전에 `tracks[0]`을 무조건 편집 대상으로 삼았다. 사용자가
-배경 이미지를 타임라인에 올려두면 그 이미지 트랙이 `tracks[0]`이 되어, 원본 영상
-대신 **PNG 한 장이 38조각으로 잘리고** 정작 영상 트랙은 그대로 남는 사고가 났다.
-지금은 실제 영상 파일을 참조하는 트랙을 자동 선택하고, 대상이 이미지면 중단한다.
-그래도 다음을 지킬 것:
-- 실행 로그의 `🎬 영상 1: <파일명>` 줄에서 **원본 영상 파일명이 맞는지 반드시 확인**한다.
-  파일명이 다르거나 `원본 NNN분`이 비상식적으로 크면 즉시 중단하고 되돌린다.
-- `⚠ 비디오 트랙이 N개입니다` 경고가 뜨면 선택된 트랙이 맞는지 확인한다.
-- 트랙을 강제하려면 `--track N`을 쓴다.
+로그에서 `🗂 타임라인`, `🎬 영상 1: <파일명>`, 감소율을 **반드시 읽습니다.** 파일명이 다르거나
+`원본 NNN분`이 비상식적으로 크면 즉시 중단하고 백업에서 되돌립니다.
 
-⚠ **되돌리기:** 적용 전 상태는 `<프로젝트상위>/.vibecut_backups/<프로젝트명>/`에
-타임스탬프 tar.gz로 자동 백업된다. 사고 시 아래로 복원한다.
+- 실제 영상 파일을 참조하는 트랙을 자동 선택하고, 대상이 이미지면 중단합니다
+  (배경 PNG 한 장이 38조각으로 잘린 사고가 있었음). 강제하려면 `--track N`.
+- 타임라인이 여러 개면 `--timeline` 없이는 멈춥니다. 메인이 아닌 타임라인은 루트
+  `draft_info.json`을 건드리지 않습니다(루트는 메인 타임라인의 사본).
+- **되돌리기**: `<프로젝트상위>/.vibecut_backups/<프로젝트명>/<타임스탬프>_capcut_editor.tar.gz`
+  → `tar -xzf <파일> -C "${PROJECT}"`
+
+### 단계 5: 자막 자동 연결 — 컷 매핑 방식 (재전사 금지)
+
+사용자가 "자막은 나중에"/"컷편집만"이라고 하지 않은 한 바로 이어서 자막을 올립니다.
+**원칙: 자막 경계 == 컷 경계.** 편집 오디오를 다시 전사하지 않습니다 — Whisper가 하드컷을
+무시해 자막이 컷을 가로지르고 같은 문장이 두 번 나오던 실패 사례가 있습니다.
 
 ```bash
-tar -xzf "<...>/.vibecut_backups/<프로젝트>/<타임스탬프>_capcut_editor.tar.gz" \
-  -C "${PROJECT}"
+# 5-A 원본 words.json을 컷 매핑으로 옮김 (오인식 사전 corrections.json 자동 적용)
+uv run "${SCRIPTS}/subtitles_from_cuts.py" --words "${STEM}_words.json" \
+  --project "${PROJECT}" "${TL_OPT[@]}"
+# → {STEM}_subtitle_input.json. "✓ 모든 자막이 컷 경계 안에…" 확인. 위반 시 종료코드 1
 ```
 
-## 부분 재편집 (사용자가 CapCut에서 이미 손으로 다듬은 뒤 나머지만 다시 편집)
+5-B 문법 경계 분할 — `subtitle-splitter` 에이전트를 호출합니다 (경로를 명시):
 
-**트리거**: "N분까지는 내가 편집했어, 뒷부분만 다시 해줘", "일부만 다시 잘라줘",
-"앞부분은 그대로 두고 뒤만 손봐줘" 등.
+```
+{STEM}_subtitle_input.json 을 읽어 한국어 문법 경계로 분할하고
+{STEM}_subtitle_splits.json 에 저장해줘. 세그먼트 수 1:1 대응, 각 원소는 텍스트 조각 배열.
+```
 
-핵심: 사용자가 CapCut에서 직접 자른 구간은 **덮어쓰지 않고 그대로 보존**하며,
-그 뒤(원본 영상 기준)만 새로 생성한 편집안으로 교체합니다.
+5-C 적용 — 비디오·오디오·사용자가 넣은 텍스트 트랙은 모두 보존하고, vibecut이 만든
+자막 트랙(이름 `vibecut`)만 교체합니다:
 
-1. **경계를 사용자 말로 어림잡지 말 것.** "1분까지"처럼 사용자가 말하는
-   시점은 대개 편집본(target) 기준 대략치이며, 실제 원본(source) 기준 경계와
-   다를 수 있다. 반드시 현재 draft_info.json을 직접 읽어서 경계를 찾는다:
+```bash
+uv run "${SCRIPTS}/_platform.py" quit-capcut
+uv run "${SCRIPTS}/apply_subtitles.py" --project "${PROJECT}" "${TL_OPT[@]}" \
+  --input "${STEM}_subtitle_input.json" --splits "${STEM}_subtitle_splits.json"
+```
 
+예전 버전이 만든 **이름 없는** 자막 트랙이 남아 있으면 로그에 `보존 (교체하려면 --replace-track N)`으로
+뜹니다. 자막이 겹쳐 보이지 않게 `--replace-track N`을 붙여 다시 실행합니다.
+
+### 단계 6: vibecut app으로 프로젝트 열기
+
+사용자가 "vibecut app은 나중에"라고 하지 않은 한 방금 편집한 프로젝트를 앱으로 띄웁니다.
+`-n`으로 항상 새 인스턴스를 띄웁니다 — 이미 열려 있으면 `open -a`만으로는 새 인자를 못 받습니다.
+
+```bash
+ls -d "/Applications/vibecut app.app" "${HOME}/Applications/vibecut app.app" 2>/dev/null | head -1 \
+  && open -n -a "vibecut app" --args "${PROJECT}" || echo "vibecut app 미설치 — 건너뜀"
+```
+
+## 부분 재편집 (사용자가 CapCut에서 이미 손으로 다듬은 뒤 나머지만 다시)
+
+**트리거**: "N분까지는 내가 편집했어, 뒷부분만", "앞부분은 그대로 두고 뒤만".
+
+1. **경계를 사용자 말로 어림잡지 말 것.** "1분까지"는 편집본 기준 대략치입니다. 현재
+   타임라인의 클립 목록(`splice_segments.py`가 출력하는 보존 클립 끝 시각)을 보고 실제
+   원본 기준 경계를 잡습니다. 문장이 끊기지 않도록 경계는 항상 클립 끝에 맞춥니다.
+2. 단계 1~3을 다시 실행해 전체 영상 기준 새 `{STEM}_segments.json`을 만듭니다
+   (words.json 재사용, NG 분석은 새로 — 보존 구간 이후에서 새로 발견되는 NG가 있을 수 있음).
+3. 이어붙이기:
    ```bash
-   python3 -c "
-   import json
-   PROJECT = '<CapCut 프로젝트 경로>'
-   d = json.load(open(PROJECT + '/draft_info.json'))
-   segs = d['tracks'][0]['segments']
-   for i, s in enumerate(segs):
-       sr = s['source_timerange']
-       print(i, sr['start']/1e6, (sr['start']+sr['duration'])/1e6)
-   "
+   uv run "${SCRIPTS}/splice_segments.py" --project "${PROJECT}" "${TL_OPT[@]}" \
+     --keep-until <원본 기준 경계 초> --new-segments "${STEM}_segments.json"
+   # → {STEM}_segments_spliced.json  (--keep-count N 도 가능)
    ```
+4. 단계 4와 동일하게 `capcut_editor.py`에 `{STEM}_segments_spliced.json`을 적용합니다.
 
-   사용자가 언급한 대략적 시점(target 기준) 근처의 클립을 찾아 그 클립의
-   **source_timerange 끝 값**을 실제 경계로 사용한다. 문장이 끊기지 않도록
-   경계는 항상 클립 끝(다음 클립 시작 직전)에 맞춘다.
+⚠ 사용자가 CapCut을 열어두고 편집 중일 수 있으니 적용 직전에 반드시 CapCut을 종료하고
+파일을 **적용 시점에 새로** 읽습니다 — 이전에 읽어둔 값을 쓰면 그 사이 편집을 덮어씁니다.
 
-2. 위 "단계 1~3"을 다시 실행해 **전체 영상 기준** 새 `final_segments.json`을
-   생성한다 (words.json 캐시는 재사용 가능, NG 분석은 새로 하는 게 안전 —
-   보존 구간 이후에서 새로 발견되는 NG가 있을 수 있음).
+## 캐시 (모두 영상 옆, 영상별 분리)
 
-3. `splice_segments.py`로 보존 구간 + 신규 구간을 이어붙인다:
+| 파일 | 있으면 |
+|------|--------|
+| `{stem}_words.json` | 전사 생략 |
+| `{stem}_transcript.txt` | 그래도 다시 생성 (1초, 정적 측정 포함) |
+| `{stem}_ng_log.json` | "NG 다시 분석" 요청이 없으면 재사용 → 2-D 검토부터 |
+| `{stem}_segments.json` | "구간 생성만 다시"가 아니면 재생성 (싸다) |
 
-   ```bash
-   uv run "${SCRIPTS}/splice_segments.py" \
-     --project "${PROJECT}" \
-     --keep-until <1단계에서 찾은 source 끝 시각> \
-     --new-segments /tmp/final_segments.json \
-     --out /tmp/final_segments_spliced.json
-   ```
-
-   `--keep-count <N>` 으로 클립 개수 기준 지정도 가능. 스크립트가 새 구간 중
-   경계와 겹치는 것은 자동으로 건너뛰어 중복 재생을 막는다.
-
-4. `capcut_editor.py`에 `/tmp/final_segments_spliced.json`을 적용한다
-   (단계 4와 동일, CapCut 종료 확인 필수).
-
-⚠ 사용자가 CapCut을 계속 열어두고 편집 중일 수 있으므로, 적용 직전 반드시
-CapCut을 다시 종료 확인하고 draft_info.json을 **적용 시점에 새로 읽어서**
-경계를 계산할 것 — 이전에 읽어둔 값을 재사용하면 그 사이 사용자가 추가로
-편집한 내용을 덮어쓰게 된다.
-
-## 캐시 활용
-
-| 파일 존재 | 동작 |
-|----------|------|
-| `{stem}_words.json` | 전사 생략 → 모델 질문 없이 바로 분석 |
-| `/tmp/ng_log.json` | NG 분석 생략 → 구간 생성부터 |
-| `/tmp/final_segments.json` | CapCut 적용만 |
+`/tmp/ng_log.json` 같은 **고정 이름의 옛 파일은 절대 재사용하지 않습니다** — 다른 영상의
+NG 구간을 그대로 자를 수 있습니다 (실제로 다른 영상 것이 남아 있었음).
 
 ## 사용자 호출 예시
 
 | 사용자 발화 | 동작 |
 |------------|------|
-| "컷편집해줘" | 전체 파이프라인 (NG 분석 → 사전 검토 승인 → 컷 적용 → 자막까지 자동 연결) |
-| "NG만 다시 분석해줘" | words.json 재사용 → transcript 재분석 → ng_log.json 재작성 → 사전 검토부터 다시 |
-| "구간 생성만 다시 해줘" | make_segments.py만 재실행 |
-| "컷편집만 해줘 (자막은 나중에)" | 단계 5(자막 자동 연결) 생략, 컷 적용까지만 |
-| "N분까지는 편집했어, 뒷부분만 다시 해줘" | "부분 재편집" 절차 (위 섹션) — draft_info.json에서 실제 경계 확인 → 전체 재분석 → splice_segments.py로 병합 |
-
-## 단계 5: 자막 자동 연결
-
-컷 적용(단계 4)이 끝나면, 사용자가 "자막은 나중에"/"컷편집만" 이라고 명시하지
-않은 한 **바로 이어서** `vibecut-add-subtitles` 스킬을 **모드 B**(이미 편집된
-CapCut 프로젝트에 자막 추가)로 호출합니다. `{stem}_words.json`은 이미 있지만
-모드 B는 컷 적용 후의 편집 타임라인 기준으로 별도 전사가 필요하므로
-`{PROJECT}_edited_words.json` 캐시가 없으면 그 스킬 안에서 새로 전사합니다
-(Whisper 모델은 동일하게 `large-v3-turbo` 고정, 질문 생략).
+| "컷편집해줘" / "1.MP4 컷편집" | 전체 파이프라인 (프로젝트 자동 탐색 → … → 자막 → vibecut app) |
+| "0903 프로젝트 타임라인1, 타임라인2 둘 다 컷편집" | 타임라인별로 단계 1~5 반복 (영상마다 `{stem}_*` 파일) |
+| "NG만 다시 분석해줘" / "NG 구간이 더 있어" | words.json 재사용 → transcript 다시 읽고(특히 ⏸/🔊 줄) → ng_log 재작성 → 2-D |
+| "구간 생성만 다시 해줘" | make_segments.py만 |
+| "컷편집만 해줘 (자막은 나중에)" | 단계 5 생략 |
+| "vibecut app은 나중에" | 단계 6 생략 |
+| "N분까지는 편집했어, 뒷부분만" | 부분 재편집 절차 |
 
 ## 주의사항
 
-- **CapCut 종료 필수**
-- **NG 리스트 검토가 1차 방어선** — 사전 검토에서 "N번은 왜 뺐어?" 처럼 개별
-  구간에 대한 피드백을 주면, 다음 실행부터 유사 패턴 판단에 반영해 재분석
-- **긴 영상** — transcript 전체를 읽어야 하므로 영상이 30분 이상이면 분할 분석 권장
-- **적용 로그를 읽고 넘어갈 것** — `🎬 영상 1: <파일명>`과 감소율이 예상과 맞는지
-  확인한다. 이 한 줄만 봤어도 이미지를 자르는 사고를 즉시 잡을 수 있었다.
+- **CapCut 종료 필수** — 파일 수정 후 CapCut을 열어야 반영됩니다.
+- **NG 리스트 검토가 1차 방어선** — "N번은 왜 뺐어?" 같은 피드백은 다음 분석에 반영합니다.
+- **긴 영상(30분+)** — transcript를 10분 단위로 나눠 읽되 NG 판단은 전체 문맥으로.
+- **적용 로그를 읽고 넘어갈 것** — `🗂 타임라인`, `🎬 영상 1: <파일명>`, 감소율.
 
 ### ⚠ CapCut GUI를 직접 조작하지 말 것 (실전 실패 사례)
 
-이 스킬은 CapCut을 **종료한 상태에서 JSON을 직접 고치는** 방식이다. 화면 자동화로
-CapCut UI를 조작하는 것은 이 파이프라인과 섞이면 위험하다:
+이 스킬은 CapCut을 **종료한 상태에서 JSON을 직접 고치는** 방식입니다. 화면 자동화로
+CapCut UI를 조작하면 실패가 잦고, 되돌리려 누른 `Cmd+Z`가 **사용자의 기존 편집까지
+되돌립니다** (영상 42컷 → 34컷, 자막 173개 → 130개 소실 사고). 미디어 가져오기·크로마키·
+클립 배치처럼 GUI가 필요한 작업은 사용자에게 절차를 안내하고 맡깁니다.
 
-- CapCut의 드래그앤드롭·컬러 피커는 좌표 기반 자동화와 잘 맞지 않아 실패가 잦고,
-  실패를 되돌리려 누른 `Cmd+Z`가 **사용자의 기존 편집까지 되돌린다**. 실제로
-  영상 42컷 → 34컷, 자막 173개 → 130개가 소실된 사고가 있었다.
-- 실패한 조작이 타임라인에 잔재(예: 배경 이미지 1클립)를 남기면, 이후 컷 적용이
-  그 잔재를 편집 대상으로 잡는 2차 사고로 이어진다.
+### ⚠ 재전사 폴백 (원본 words.json이 없는 프로젝트에서만)
 
-미디어 가져오기·크로마키·클립 배치처럼 GUI가 필요한 작업은 **사용자에게 절차를
-안내**하고 맡긴다. 부득이 자동화한다면 먼저 프로젝트 폴더를 통째로 백업하고,
-`Cmd+Z`를 되돌리기 수단으로 쓰지 않는다(무엇이 되돌려질지 알 수 없다).
-
-### ⚠ 자막 싱크: ffconcat inpoint/outpoint는 부정확하다 (실전 실패 사례)
-
-단계 5(자막 연결)에서 편집본 오디오를 만들 때 `ffmpeg -f concat` +
-`inpoint/outpoint`를 쓰면 구간당 약 0.4초씩 초과 추출되어, 38컷 기준 **16.8초**가
-밀렸다(465.8초 타임라인 → 482.5초 오디오). 자막이 뒤로 갈수록 어긋난다.
-
-각 구간을 `-ss/-t`로 개별 추출해 이어붙이면 정확하다:
-
-```python
-import json, subprocess, os, pathlib
-PROJECT = "<CapCut 프로젝트 경로>"
-data = json.loads(pathlib.Path(PROJECT, "draft_info.json").read_text())
-mats = {v["id"]: v["path"] for v in data["materials"]["videos"]}
-segs = next(sorted(t["segments"], key=lambda s: s["target_timerange"]["start"])
-            for t in data["tracks"] if t["type"] == "video")
-
-with open("/tmp/edited.raw", "wb") as f:
-    for seg in segs:
-        src = seg["source_timerange"]
-        p = subprocess.run([
-            "ffmpeg", "-v", "error",
-            "-ss", f"{src['start']/1e6:.6f}", "-t", f"{src['duration']/1e6:.6f}",
-            "-i", mats[seg["material_id"]],
-            "-vn", "-ac", "1", "-ar", "16000", "-f", "s16le", "-"
-        ], capture_output=True)
-        f.write(p.stdout)
-```
-
-```bash
-ffmpeg -y -v error -f s16le -ar 16000 -ac 1 -i /tmp/edited.raw \
-  -acodec pcm_s16le /tmp/${PROJECT_NAME}_edited.wav
-```
-
-**검증 필수**: 만든 wav 길이와 `draft_info.json`의 `duration`이 **0.1초 이내로
-일치**해야 한다. 어긋나면 그대로 자막 오차가 된다.
-
-```bash
-ffprobe -v error -show_entries format=duration -of csv=p=0 /tmp/${PROJECT_NAME}_edited.wav
-```
-
-### ⚠ subtitle_splits.json 형식 — 인덱스가 아니라 텍스트 조각
-
-`add_subtitles.py`의 `split_by_splits()`는 각 원소를 **분할된 텍스트 문자열 배열**로
-기대한다. 분할 지점 인덱스를 넘기면 `AttributeError: 'int' object has no attribute
-'strip'`으로 죽는다.
-
-```json
-[[], ["이번 영상에서는 프롬프트를 작성할 때", "엔트로픽 개발자가 사용하는 방법과"], []]
-```
-
-분할 에이전트에 이 형식을 명시하고, 넘기기 전에 **공백 제거 후 원문과 일치하는지**
-검증한다(글자 유실·변형 방지).
+외부에서 편집된 프로젝트는 `vibecut-add-subtitles` 모드 B 폴백을 씁니다. 그때
+`ffmpeg -f concat`의 `inpoint/outpoint`는 구간당 약 0.4초씩 초과 추출되어 38컷에서
+16.8초가 밀렸으니, 반드시 그 스킬의 `-ss/-t` 개별 추출 + 길이 검증을 지킵니다.
