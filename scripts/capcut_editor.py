@@ -319,6 +319,26 @@ def build_segments(final_segs: list, orig_video: dict, orig_segment: dict,
     return segments, materials, timeline_frame
 
 
+def clone_video_segment(tmpl_seg: dict, tmpl_video: dict, source_start_us: int, dur_us: int,
+                        timeline_pos_us: int, materials: dict) -> dict:
+    """기존 세그먼트를 새 구간으로 복제한다. 세그먼트마다 소재 7종을 새로 만들어 materials에 쌓고,
+    위치·크기(clip)·볼륨·렌더 순서는 템플릿 값을 그대로 쓴다 (make_segment는 이 값들을 초기화한다).
+
+    materials: build_segments가 돌려주는 것과 같은 키의 dict. 호출한 쪽이 draft에 이어붙인다.
+    """
+    vid, spd, plc, cvs, snd, col, vcl, sid = (new_id() for _ in range(8))
+    for key, item in (("videos", make_video_material(vid, tmpl_video)), ("speeds", make_speed(spd)),
+                      ("placeholder_infos", make_placeholder(plc)), ("canvases", make_canvas(cvs)),
+                      ("sound_channel_mappings", make_sound_channel(snd)), ("material_colors", make_material_color(col)),
+                      ("vocal_separations", make_vocal_separation(vcl))):
+        materials.setdefault(key, []).append(item)
+    seg = make_segment(sid, vid, [spd, plc, cvs, snd, col, vcl], source_start_us, dur_us, timeline_pos_us, tmpl_seg)
+    for key in ("render_index", "track_render_index", "clip", "uniform_scale", "volume", "last_nonzero_volume"):
+        if key in tmpl_seg:
+            seg[key] = copy.deepcopy(tmpl_seg[key])
+    return seg
+
+
 # ────────────────────────────────────────────────
 # 편집 대상 트랙 선택
 # ────────────────────────────────────────────────

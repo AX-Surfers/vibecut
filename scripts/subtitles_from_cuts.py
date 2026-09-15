@@ -29,6 +29,48 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from capcut_editor import draft_path_for, pick_video_track, resolve_timeline  # noqa: E402
+from make_transcript import detect_silences  # noqa: E402
+
+SNAP_MIN_SILENCE = 0.25   # 이보다 짧은 멈춤에서는 자막을 끊지 않는다 (깜빡임 방지)
+# 노이즈 게이트가 걸린 녹음은 말이 -22~-30dB, 음절 사이 틈이 -60dB 이하로 떨어진다.
+# make_transcript의 -30dB로 재면 구절 속 틈까지 정적으로 잡혀 자막이 말 도중에 끊겼다(실전).
+# -45dB는 소음 많은 녹음에서 정적을 덜 잡을 뿐(= Whisper 시각 유지)이라 해가 없다.
+SNAP_NOISE_DB = -45
+SNAP_MAX_CPS = 9          # 단어를 이보다 빨리 읽히게 줄이는 조정은 하지 않는다 (글자/초)
+
+
+def snap_words_to_audio(segments: list[dict], silences: list[tuple[float, float]]) -> int:
+    """Whisper 단어 시각을 실제 정적에 맞춰 다듬는다 (원본 시각, 제자리 수정). 반환: 고친 단어 수.
+
+    실전 사례: "그래서 이 어사이드가 | 요즘 굉장히 핫하거든요"에서 Whisper는 "어사이드가"를
+    36.78~38.50s로 잡았지만 말은 37.44s에 끝나고 38.16s까지 정적이었다. 자막이 정적 동안
+    남아 있다가 다음 자막이 늦게 떴다. 38분 영상에서 단어 457개는 끝이 정적 안으로 늘어났고
+    (평균 0.5초), 384개는 시작이 정적 안에 일찍 찍혔고, 104개는 정적을 통째로 품었다.
+    """
+    words = [w for seg in segments for w in seg.get("words", []) if "start" in w and "end" in w]
+    original = [(w["start"], w["end"]) for w in words]
+    for i, w in enumerate(words):
+        min_dur = max(0.08, len(w["word"].strip()) / SNAP_MAX_CPS)
+        for s, e in silences:
+            if e <= w["start"] or s >= w["end"]:
+                continue
+            if s <= w["start"] and e >= w["end"]:
+                break                      # 단어 전체가 정적 — 작게 말한 단어일 수 있어 그대로 둔다
+            if s <= w["start"]:
+                if w["end"] - e >= min_dur:
+                    w["start"] = e         # 시작이 정적 안 → 말이 시작되는 곳으로
+            elif e >= w["end"]:
+                if s - w["start"] >= min_dur:
+                    w["end"] = s           # 끝이 정적 안 → 말이 끝나는 곳으로
+            elif s - w["start"] >= w["end"] - e:
+                if s - w["start"] >= min_dur:
+                    w["end"] = s           # 정적을 품었고 앞쪽이 발음 → 끝을 당기고,
+                    if i + 1 < len(words):  # 정적 뒤 꼬리는 사실 다음 단어의 시작
+                        words[i + 1]["start"] = min(words[i + 1]["start"], e)
+            elif w["end"] - e >= min_dur:
+                w["start"] = e             # 뒤쪽이 발음 → 시작을 미룬다
+    # 다음 단어 시작도 앞 단어 처리 중에 바뀌므로 원래 값과 비교해 센다
+    return sum((w["start"], w["end"]) != o for w, o in zip(words, original))
 
 
 def load_cut_map(draft: dict) -> list[dict]:
@@ -172,6 +214,7 @@ def main():
     ap.add_argument("--timeline", default=None, help="타임라인이 여러 개면 이름 또는 id 앞부분")
     ap.add_argument("--out", default=None, help="기본: <stem>_subtitle_input.json (words.json 옆)")
     ap.add_argument("--no-corrections", action="store_true", help="오인식 사전 적용 생략")
+    ap.add_argument("--audio", default=None, help="정적 측정용 오디오 (기본: <stem>_audio.wav)")
     args = ap.parse_args()
 
     proj = Path(args.project).expanduser()
@@ -179,6 +222,14 @@ def main():
     draft = json.loads(draft_path_for(proj, timeline_uuid).read_text(encoding="utf-8"))
     wp = Path(args.words)
     segments = json.loads(wp.read_text(encoding="utf-8"))
+    stem = wp.name[:-len("_words.json")] if wp.name.endswith("_words.json") else wp.stem
+
+    wav = Path(args.audio) if args.audio else wp.with_name(stem + "_audio.wav")
+    if wav.exists():
+        n = snap_words_to_audio(segments, detect_silences(wav, noise_db=SNAP_NOISE_DB, min_dur=SNAP_MIN_SILENCE))
+        print(f"실제 정적에 맞춰 단어 시각 교정: {n}개")
+    else:
+        print(f"⚠ {wav.name} 없음 — Whisper 단어 시각 그대로 사용 (자막 경계가 정적만큼 어긋날 수 있음)")
 
     cuts = load_cut_map(draft)
     units = build_units(segments, cuts)
@@ -200,7 +251,6 @@ def main():
     print("✓ 모든 자막이 컷 경계 안에 있고, 각 컷의 첫/끝 자막이 컷 가장자리에 붙어 있음")
 
     out = [{k: u[k] for k in ("text", "words", "start", "end")} for u in units]
-    stem = wp.name[:-len("_words.json")] if wp.name.endswith("_words.json") else wp.stem
     out_path = Path(args.out) if args.out else wp.with_name(stem + "_subtitle_input.json")
     out_path.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"저장: {out_path}")

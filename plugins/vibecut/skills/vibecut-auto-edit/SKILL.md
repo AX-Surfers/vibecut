@@ -1,13 +1,16 @@
 ---
 name: vibecut-auto-edit
-version: 0.9.0
+version: 0.10.0
 description: |
   Whisper 전사 → 정적 표시된 transcript를 Claude가 직접 읽고 NG 판단 → 사용자 검토 →
   CapCut 컷 적용 → 자막까지 자동 연결. 영상이 들어 있는 CapCut 프로젝트·타임라인을
   자동으로 찾고, 타임라인이 여러 개인 프로젝트와 영상 여러 개도 처리한다.
   강의형 콘텐츠의 "강조용 의도적 반복"을 실수로 오판하지 않도록 컷 적용 전
   번호 리스트로 NG 후보를 보여주고 승인/제외를 받는다.
-  트리거: "무음 제거", "컷편집", "캡컷 편집", "NG 제거", "/vibecut-auto-edit"
+  사용자가 손으로 다듬은 앞부분의 컷 스타일을 재서 뒷부분에 적용하고, 얼굴캠(DJI 등)을
+  소리로 싱크 맞춰 PIP로 올린다.
+  트리거: "무음 제거", "컷편집", "캡컷 편집", "NG 제거", "뒷부분만 이어서", "얼굴캠", "DJI 영상 넣어",
+  "/vibecut-auto-edit"
 metadata:
   category: video
   locale: ko-KR
@@ -46,7 +49,10 @@ Whisper가 전사한 단어 타임스탬프와 실제 오디오의 정적 구간
    ├─ [3-B] 프로젝트 상태 점검
    ├─ [4] capcut_editor.py --timeline <이름>   4개 파일 갱신 + 자동 백업
    ├─ [5] 자막 자동 연결            subtitles_from_cuts.py → 분할 → apply_subtitles.py
-   └─ [6] vibecut app으로 열기
+   ├─ [6] vibecut app으로 열기
+   │
+   ├─ (요청 시) 손편집 스타일로 뒷부분 촘촘히   tighten_pauses.py   ← "앞은 내가 했어, 뒷부분 이어서"
+   └─ (요청 시) 얼굴캠 PIP                     facecam.py          ← "DJI 영상 싱크 맞춰 오른쪽 아래에"
 ```
 
 ## 전제 조건 (모든 Bash 블록 앞에 한 번)
@@ -73,7 +79,7 @@ if [ -z "${SCRIPTS}" ]; then
 fi
 [ -z "${SCRIPTS}" ] && echo "❌ vibecut-setup 먼저 실행" && exit 1
 
-uv run "${SCRIPTS}/_platform.py" quit-capcut
+uv run python -c "import sys; sys.path.insert(0, '${SCRIPTS}'); from _platform import check_capcut_not_running as c; c()"
 ```
 
 ## 실행 흐름
@@ -264,7 +270,7 @@ PYEOF
 ### 단계 4: CapCut JSON 적용
 
 ```bash
-uv run "${SCRIPTS}/_platform.py" quit-capcut
+uv run python -c "import sys; sys.path.insert(0, '${SCRIPTS}'); from _platform import check_capcut_not_running as c; c()"
 uv run "${SCRIPTS}/capcut_editor.py" "${STEM}_segments.json" --project "${PROJECT}" "${TL_OPT[@]}"
 ```
 
@@ -291,6 +297,11 @@ uv run "${SCRIPTS}/subtitles_from_cuts.py" --words "${STEM}_words.json" \
 # → {STEM}_subtitle_input.json. "✓ 모든 자막이 컷 경계 안에…" 확인. 위반 시 종료코드 1
 ```
 
+`{STEM}_audio.wav`가 있으면 단어 시각을 실제 말소리에 맞춰 다듬습니다("실제 정적에 맞춰 단어 시각 교정: N개").
+Whisper는 멈춘 시간을 앞 단어에 흡수시켜, 말이 끝났는데 자막이 남고 다음 자막이 늦게 뜨던 실패가
+있었습니다. 기준은 -45dB — 노이즈 게이트 녹음에서 -30dB로 재자 구절 속 틈까지 잡혀 자막이 0.6초 만에
+사라지는 등 더 나빠졌습니다. 글자/초 9를 넘게 줄이는 조정은 하지 않습니다.
+
 5-B 문법 경계 분할 — `subtitle-splitter` 에이전트를 호출합니다 (경로를 명시):
 
 ```
@@ -302,7 +313,7 @@ uv run "${SCRIPTS}/subtitles_from_cuts.py" --words "${STEM}_words.json" \
 자막 트랙(이름 `vibecut`)만 교체합니다:
 
 ```bash
-uv run "${SCRIPTS}/_platform.py" quit-capcut
+uv run python -c "import sys; sys.path.insert(0, '${SCRIPTS}'); from _platform import check_capcut_not_running as c; c()"
 uv run "${SCRIPTS}/apply_subtitles.py" --project "${PROJECT}" "${TL_OPT[@]}" \
   --input "${STEM}_subtitle_input.json" --splits "${STEM}_subtitle_splits.json"
 ```
@@ -312,12 +323,34 @@ uv run "${SCRIPTS}/apply_subtitles.py" --project "${PROJECT}" "${TL_OPT[@]}" \
 
 ### 단계 6: vibecut app으로 프로젝트 열기
 
-사용자가 "vibecut app은 나중에"라고 하지 않은 한 방금 편집한 프로젝트를 앱으로 띄웁니다.
+사용자가 "vibecut app은 나중에"라고 하지 않은 한 방금 편집한 **CapCut 프로젝트**를 앱으로 띄웁니다
+(영상 파일로 열지 않습니다 — 영상으로 열면 CapCut 되돌려쓰기 경로가 지워집니다).
 `-n`으로 항상 새 인스턴스를 띄웁니다 — 이미 열려 있으면 `open -a`만으로는 새 인자를 못 받습니다.
 
+- **프로젝트 폴더가 아니라 편집한 타임라인의 `draft_info.json`을 넘깁니다.** 폴더를 넘기면 앱이
+  `Timelines/` 안에서 처음 보이는 타임라인을 골라, 타임라인이 여러 개면 엉뚱한 쪽이 열립니다.
+- **앱이 실행 인자를 지원하는지 먼저 봅니다** (`get_launch_project_path` 명령이 바이너리에 있는지).
+  `strings | grep`은 릴리스 바이너리에서 이 이름을 못 찾아 멀쩡한 앱을 옛 빌드로 오판했습니다 —
+  반드시 `grep -a`로 원시 바이트를 검색합니다.
+
 ```bash
-ls -d "/Applications/vibecut app.app" "${HOME}/Applications/vibecut app.app" 2>/dev/null | head -1 \
-  && open -n -a "vibecut app" --args "${PROJECT}" || echo "vibecut app 미설치 — 건너뜀"
+DRAFT=$(uv run python - "${PROJECT}" "${TIMELINE}" "${SCRIPTS}" <<'PYEOF' | tail -1
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[3])
+from capcut_editor import draft_path_for, resolve_timeline
+tl, _ = resolve_timeline(Path(sys.argv[1]), sys.argv[2] or None)
+print(draft_path_for(Path(sys.argv[1]), tl))
+PYEOF
+)
+APP=$(ls -d "/Applications/vibecut app.app" "${HOME}/Applications/vibecut app.app" 2>/dev/null | head -1)
+if [ -z "${APP}" ]; then
+  echo "vibecut app 미설치 — 건너뜀"
+elif ! grep -a -q get_launch_project_path "${APP}/Contents/MacOS/vibecut"; then
+  echo "⚠ 설치된 vibecut app이 프로젝트 경로 인자를 지원하지 않는 옛 빌드 — 새로 빌드해야 프로젝트로 열립니다"
+else
+  open -n -a "${APP}" --args "${DRAFT}"
+fi
 ```
 
 ## 부분 재편집 (사용자가 CapCut에서 이미 손으로 다듬은 뒤 나머지만 다시)
@@ -337,8 +370,52 @@ ls -d "/Applications/vibecut app.app" "${HOME}/Applications/vibecut app.app" 2>/
    ```
 4. 단계 4와 동일하게 `capcut_editor.py`에 `{STEM}_segments_spliced.json`을 적용합니다.
 
-⚠ 사용자가 CapCut을 열어두고 편집 중일 수 있으니 적용 직전에 반드시 CapCut을 종료하고
+⚠ 사용자가 CapCut을 열어두고 편집 중일 수 있으니 적용 직전에 CapCut이 꺼져 있는지 확인하고
 파일을 **적용 시점에 새로** 읽습니다 — 이전에 읽어둔 값을 쓰면 그 사이 편집을 덮어씁니다.
+
+### 컷은 이미 된 상태에서 "앞은 내가 다듬었어, 뒷부분도 그렇게"
+
+사용자가 CapCut에서 앞부분을 손으로 다듬었으면 **그 편집에서 기준을 재서** 뒷부분에 적용합니다.
+실전: 자동 컷은 문장 단위라 클립 안 멈춤이 최대 1.16초 남았고, 사용자는 말 앞 0.06초·뒤 0.04초만 남기고
+0.7초 이상 멈춤은 전부, 0.5~0.7초는 대부분 잘랐습니다. NG 판단(말을 자르는 것)은 다시 하지 않습니다.
+
+1. **경계는 백업과 비교해 찾습니다** — 사용자 말("3분까지")은 대략치입니다. `--backup`에 사용자가 편집하기
+   직전의 vibecut 백업을 주면, 뒤에서부터 백업과 똑같은 클립을 걷어내 손댄 마지막 클립을 찾습니다.
+2. 먼저 `--dry-run --learn`으로 잰 기준·줄어드는 길이·잘린 말소리(0이어야 함)를 보여주고 기준을 확인받습니다.
+3. 본영상과 1:1로 맞춰진 얼굴캠 트랙과 경계 뒤 자막은 같이 옮겨집니다. 경계 앞은 건드리지 않습니다.
+
+```bash
+BACKUP="<.vibecut_backups/<프로젝트>/<사용자 편집 직전 타임스탬프>_capcut_editor.tar.gz>"
+uv run "${SCRIPTS}/tighten_pauses.py" --project "${PROJECT}" "${TL_OPT[@]}" --backup "${BACKUP}" --learn --dry-run
+# 확인받은 뒤 --dry-run 없이 (기준을 바꾸려면 --min-pause 0.5 등)
+uv run "${SCRIPTS}/tighten_pauses.py" --project "${PROJECT}" "${TL_OPT[@]}" --backup "${BACKUP}" --learn
+```
+
+## 얼굴캠(DJI 등) PIP
+
+**트리거**: "DJI 영상도 싱크 맞춰 넣어줘", "얼굴 오른쪽 아래에".
+
+1. 얼굴캠 파일은 사용자가 CapCut에서 가져와 **아무 비디오 트랙에 한 번 올립니다** (미디어 가져오기는 GUI 작업).
+2. 크기와 소리는 사용자에게 묻습니다 (크기: 캔버스 높이 대비 비율 / 소리: `auto`는 노이즈 게이트로 끊기는
+   쪽을 피함 — 실전에서 화면녹화는 칸의 46%가 완전무음, DJI는 0%였음).
+3. 적용 후 출력되는 "싱크 실측 어긋남"이 ±15ms 안인지 봅니다.
+
+```bash
+uv run "${SCRIPTS}/facecam.py" --project "${PROJECT}" "${TL_OPT[@]}" --facecam "<DJI 파일명>" \
+  --corner br --height 0.35 --margin 0 --audio auto --dry-run
+# 확인받은 뒤 --dry-run 없이. 위치·크기만 바꿀 때: --place-only --margin 0
+# 사용자가 손으로 다듬은 앞부분이 있으면: --from-clip <첫 자동 편집 클립> (앞은 300ms 넘게 어긋난 조각만 고침)
+```
+
+- **싱크는 소리로 잽니다.** 파일 생성 시각 차이(42초)는 틀렸고 실제로는 1.4초였습니다.
+- **두 기기의 시계는 실제로 다르게 갑니다.** DJI가 약 40ppm 느려 37분 동안 오프셋이 1.43→1.34초로 줄었습니다.
+  스크립트는 녹화 곳곳 8개 창에서 양쪽 ±0.3초로 찾고 직선으로 맞춥니다. 직선에서 25ms 넘게 벗어난 창이 있으면
+  (녹화 끊김 의심) 멈추고 알립니다.
+- **탐색 범위를 한쪽으로만 잡지 않습니다.** 1.40~1.60초만 찾았다가 결과가 전부 아래 끝(1.400)에 붙어
+  "오프셋이 일정하다"고 잘못 결론 내리고 멀쩡한 시계 차이 보정을 없앤 적이 있습니다. 결과가 탐색 끝에 붙으면 버립니다.
+- **CapCut은 원본 시작점을 30fps 칸에 맞춰 저장합니다.** 한 프레임(33ms)보다 정밀한 싱크는 불가능하니,
+  실측 어긋남이 ±17ms 안이면 정상입니다.
+- 오른쪽 아래 모서리를 영상 모서리에 딱 붙이는 게 기본(`--margin 0`)입니다 — 30px 띄웠다가 붙여 달라는 요청을 받았습니다.
 
 ## 캐시 (모두 영상 옆, 영상별 분리)
 
@@ -363,10 +440,15 @@ NG 구간을 그대로 자를 수 있습니다 (실제로 다른 영상 것이 �
 | "컷편집만 해줘 (자막은 나중에)" | 단계 5 생략 |
 | "vibecut app은 나중에" | 단계 6 생략 |
 | "N분까지는 편집했어, 뒷부분만" | 부분 재편집 절차 |
+| "앞은 내가 다듬었어, 내가 한 거 반영해서 뒷부분 진행해" | `tighten_pauses.py --backup … --learn` (NG 재분석 없음) |
+| "DJI 영상 싱크 맞춰서 오른쪽 아래에 넣어줘" | `facecam.py` (크기·소리 확인 후) |
+| "DJI 모서리를 영상 모서리에 맞춰줘" | `facecam.py --place-only --margin 0` |
 
 ## 주의사항
 
-- **CapCut 종료 필수** — 파일 수정 후 CapCut을 열어야 반영됩니다.
+- **CapCut이 꺼져 있어야 씁니다 — 강제 종료하지 않습니다.** 사용자가 CapCut으로 같이 편집하는 중일 수 있어
+  `pkill`로 끄면 저장 안 된 편집이 날아갑니다. 실행 중이면 쓰기 전에 멈추고 "저장 후 Cmd+Q로 종료"를 부탁한 뒤
+  기다립니다. 종료 후 파일을 **새로 읽어** 분석 때와 클립·자막 수가 같은지 확인하고 씁니다.
 - **NG 리스트 검토가 1차 방어선** — "N번은 왜 뺐어?" 같은 피드백은 다음 분석에 반영합니다.
 - **긴 영상(30분+)** — transcript를 10분 단위로 나눠 읽되 NG 판단은 전체 문맥으로.
 - **적용 로그를 읽고 넘어갈 것** — `🗂 타임라인`, `🎬 영상 1: <파일명>`, 감소율.
