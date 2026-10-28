@@ -59,6 +59,14 @@ def start_of(s: dict) -> int:
     return s["target_timerange"]["start"]
 
 
+def same_span(a: dict, b: dict, tol_us: int = 1000) -> bool:
+    """두 세그먼트가 같은 자리인지 (CapCut이 저장하며 1µs쯤 반올림하므로 오차를 준다).
+    정확히 같은지로 보면 CapCut이 한 번 저장한 뒤 '안 맞음'으로 잘못 보고 트랙을 새로 만들어,
+    거기 걸어 둔 크로마키가 날아간다."""
+    return abs(start_of(a) - start_of(b)) <= tol_us and \
+        abs(a["target_timerange"]["duration"] - b["target_timerange"]["duration"]) <= tol_us
+
+
 def envelope(x: np.ndarray, sr: int, hop_s: float) -> np.ndarray:
     """말의 리듬(로그 에너지 포락선). 마이크가 달라도 같은 말이면 모양이 같다."""
     h = max(1, int(sr * hop_s))
@@ -185,7 +193,7 @@ def main():
     fc_segs = sorted(fc_t["segments"], key=start_of)
     fc_mat = vids[fc_segs[0]["material_id"]]
     fc_path, fc_dur_us = Path(fc_mat["path"]), fc_mat["duration"]
-    aligned = len(fc_segs) == len(mains) and all(a["target_timerange"] == b["target_timerange"] for a, b in zip(fc_segs, mains))
+    aligned = len(fc_segs) == len(mains) and all(same_span(a, b) for a, b in zip(fc_segs, mains))
 
     cw, ch = d["canvas_config"]["width"], d["canvas_config"]["height"]
     scale, tx, ty, w, h = corner_transform(cw, ch, fc_mat["width"], fc_mat["height"], args.height, args.margin, args.corner)
@@ -223,7 +231,7 @@ def main():
             if src < 0 or src + dur > fc_dur_us:
                 skipped += 1
                 continue
-            new.append(clone_video_segment(tmpl, fc_mat, src, dur, start_of(m), added))
+            new.append(clone_video_segment(tmpl, fc_mat, src, dur, start_of(m), added, draft_materials=M))
             resynced.append(i)
         old_ids = {r for s in fc_segs for r in (s["material_id"], *s.get("extra_material_refs", []))}
         fc_t["segments"] = new
@@ -274,7 +282,7 @@ def main():
     m2 = sorted(d2["tracks"][mi]["segments"], key=start_of)
     f2 = sorted(next(t for t in d2["tracks"] if t["id"] == fc_t["id"])["segments"], key=start_of)
     problems = []
-    if not skipped and (len(f2) != len(m2) or any(a["target_timerange"] != b["target_timerange"] for a, b in zip(f2, m2))):
+    if not skipped and (len(f2) != len(m2) or any(not same_span(a, b) for a, b in zip(f2, m2))):
         problems.append("얼굴캠이 본영상과 1:1로 안 맞음")
     if any(r not in ids for t in d2["tracks"] for s in t["segments"] for r in (s["material_id"], *s.get("extra_material_refs", []))):
         problems.append("끊긴 소재 참조")

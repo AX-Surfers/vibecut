@@ -55,6 +55,12 @@ def end_of(s: dict) -> int:
     return s["target_timerange"]["start"] + s["target_timerange"]["duration"]
 
 
+def same_span(a: dict, b: dict, tol_us: int = 1000) -> bool:
+    """두 세그먼트가 같은 자리인지 (CapCut이 저장하며 1µs쯤 반올림하므로 오차를 준다)."""
+    return abs(start_of(a) - start_of(b)) <= tol_us and \
+        abs(a["target_timerange"]["duration"] - b["target_timerange"]["duration"]) <= tol_us
+
+
 def plan_pieces(src_s: float, src_e: float, mask: np.ndarray, min_pause: float, keep_after: float,
                 keep_before: float, fps: int = FPS) -> list[tuple[int, int]]:
     """원본 [src_s, src_e) 클립 하나를 가장자리 정적을 다듬고 멈춤에서 나눈 조각들 [(시작프레임, 끝프레임), ...]."""
@@ -163,7 +169,7 @@ def main():
             continue
         segs = sorted(t["segments"], key=start_of)
         if t["type"] == "video" and len(segs) == len(mains) and all(
-                a["target_timerange"] == b["target_timerange"] for a, b in zip(segs, mains)):
+                same_span(a, b) for a, b in zip(segs, mains)):
             overlays.append((t, segs))
         elif t["type"] != "text" and any(end_of(s) > boundary for s in segs):
             blockers.append(f"{t['type']} 트랙({len(segs)}개)")
@@ -225,7 +231,8 @@ def main():
             mat_dur = vids[ov["material_id"]].get("duration") or 0
             if ov_src < 0 or (mat_dur and ov_src + dur > mat_dur):
                 raise SystemExit(f"❌ 오버레이가 소재 범위를 벗어납니다 (타임라인 {tgt / 1e6:.2f}초) — 쓰지 않고 중단")
-            new_ov[j].append(clone_video_segment(ov, vids[ov["material_id"]], ov_src, dur, tgt, added))
+            new_ov[j].append(clone_video_segment(ov, vids[ov["material_id"]], ov_src, dur, tgt, added,
+                                                draft_materials=M))   # 크로마키 등 효과 유지
         piece_map.append((src / 1e6, (src + dur) / 1e6, tgt / 1e6))
         frames += b - a
     assert all(p[1] <= q[0] + 1e-6 for p, q in zip(piece_map, piece_map[1:])), "원본 순서가 뒤섞인 클립은 지원하지 않음"
@@ -298,7 +305,7 @@ def main():
         problems.append("경계 앞 클립이 바뀜")
     if any(abs(end_of(a) - start_of(b)) > 1 for a, b in zip(m2, m2[1:])):
         problems.append("본영상 클립 사이 틈/겹침")
-    if any(len(segs) != len(m2) or any(a["target_timerange"] != b["target_timerange"] for a, b in zip(segs, m2)) for segs in ov2):
+    if any(len(segs) != len(m2) or any(not same_span(a, b) for a, b in zip(segs, m2)) for segs in ov2):
         problems.append("오버레이가 본영상과 1:1로 안 맞음")
     if any(r not in ids for t in d2["tracks"] for s in t["segments"] for r in (s["material_id"], *s.get("extra_material_refs", []))):
         problems.append("끊긴 소재 참조")

@@ -109,6 +109,17 @@ uv run "${SCRIPTS}/subtitles_from_cuts.py" --words "${STEM}_words.json" \
 ```
 `apply_subtitles.py`가 개수와 형식을 검사하고, 공백 제거 후 원문과 다른 조각은 경고합니다.
 
+### 단계 3.5: 조각 자막 보정 (자동)
+
+`apply_subtitles.py`는 적용 전에 `repair_parts()`로 "아까처럼 제주도 / 여행", "만들고 / 싶어" 같은
+어색한 조각을 이웃 자막과 잇습니다(간격 0.6초 이하, 합쳐 32자 이하, 앞 자막이 문장을 끝내지 않은 경우).
+이미 적용된 프로젝트는 전사·분할을 다시 하지 않고 `--repair-existing`만 주면 지금 자막(CapCut에서 고친
+문구·시각 포함)을 그대로 두고 조각만 잇습니다:
+
+```bash
+uv run "${SCRIPTS}/apply_subtitles.py" --project "${PROJECT}" --repair-existing
+```
+
 ### 단계 4: 적용 (다른 트랙 보존)
 
 ```bash
