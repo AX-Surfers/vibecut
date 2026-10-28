@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from subtitles_from_cuts import build_units, check_alignment
+from subtitles_from_cuts import build_units, check_alignment, snap_words_to_audio
 
 
 def words(*pairs):
@@ -86,7 +86,22 @@ def demo():
     bad = [dict(units[0], end=cuts[0]["tgt_e"] + 1.0)]
     assert check_alignment(bad, cuts), "경계 초과를 못 잡음"
 
-    print(f"OK: {len(units)}개 단위, 컷 경계 위반 0건, NG 제거·병합·패딩·수동 중간컷·정적 흡수 단어 모두 통과")
+    # 정적 스냅 — 실전 사례: "어사이드가" 36.78~38.50가 정적 37.44~38.16을 통째로 품음
+    def sw(s, e):
+        return {"word": " x", "start": s, "end": e}
+    ss = [{"words": [sw(36.30, 36.78), sw(36.78, 38.50), sw(38.50, 38.76)]}]
+    assert snap_words_to_audio(ss, [(37.44, 38.16)]) == 2
+    _, aw, bw = ss[0]["words"]
+    assert (aw["start"], aw["end"], bw["start"]) == (36.78, 37.44, 38.16), (aw, bw)
+    ss = [{"words": [sw(35.22, 35.98)]}, {"words": [sw(36.00, 36.50)]}]   # 끝/시작이 정적 안, 세그먼트 넘어도
+    snap_words_to_audio(ss, [(35.57, 36.09)])
+    assert ss[0]["words"][0]["end"] == 35.57 and ss[1]["words"][0]["start"] == 36.09
+    ss = [{"words": [sw(38.0, 40.0)]}]                                      # 뒤쪽이 발음 → 시작을 미룸
+    snap_words_to_audio(ss, [(38.2, 39.0)])
+    assert ss[0]["words"][0]["start"] == 39.0
+    assert snap_words_to_audio([{"words": [sw(10.0, 10.2)]}], [(9.5, 11.0)]) == 0   # 단어 전체가 정적 → 그대로
+
+    print(f"OK: {len(units)}개 단위, 컷 경계 위반 0건, NG 제거·병합·패딩·수동 중간컷·정적 흡수 단어·정적 스냅 모두 통과")
 
 
 if __name__ == "__main__":

@@ -570,6 +570,43 @@ def split_by_splits(segments: list[dict], splits_data: list[list[str]]) -> list[
     return result
 
 
+# 서술부·의존 명사로 시작하는 파트는 앞 파트에 붙어 다닌다 ("해줄 | 수가 있어요", "갈 | 때 쓰려고")
+_DEPENDENT_START = ("수", "있", "않", "못", "할", "하", "되", "돼", "된", "거", "것", "듯", "때", "뿐")
+_SENTENCE_END = (".", "?", "!", "…") + _SHORT_TAIL_ENDINGS
+
+
+def repair_parts(parts: list[dict], max_chars: int = 32, tiny_chars: int = 5,
+                 max_gap: float = 0.6) -> list[dict]:
+    """분할 결과에서 문장이 어색하게 쪼개진 곳을 이웃과 이어 붙인다 (세그먼트 경계를 넘어서도).
+
+    subtitle-splitter는 Whisper 세그먼트 안에서만 자르기 때문에, 말이 막혀 세그먼트가 짧게 끊기면
+    "아까처럼 제주도 / 여행", "만들고 / 싶어" 같은 조각 자막이 생긴다. 조건(모두):
+      - 두 파트 사이 간격 ≤ max_gap, 합친 길이 ≤ max_chars
+      - 앞 파트가 문장을 끝내지 않았다(종결어미·마침표가 아님)
+      - 뒤 파트가 너무 짧거나(≤ tiny_chars자), 서술부로 시작하거나, 앞 파트가 너무 짧다
+    """
+    def size(p: dict) -> int:
+        return len(p["text"].replace(" ", ""))
+
+    out: list[dict] = []
+    for part in parts:
+        part = dict(part)
+        if out:
+            prev = out[-1]
+            gap = part["start"] - prev["end"]
+            merged_len = len(prev["text"].strip()) + 1 + len(part["text"].strip())
+            if (gap <= max_gap and merged_len <= max_chars
+                    and not prev["text"].strip().endswith(_SENTENCE_END)
+                    and (size(part) <= tiny_chars
+                         or part["text"].strip().startswith(_DEPENDENT_START)
+                         or size(prev) <= tiny_chars)):
+                prev["text"] = prev["text"].strip() + " " + part["text"].strip()
+                prev["end"] = part["end"]
+                continue
+        out.append(part)
+    return out
+
+
 def dump_subtitle_input(segments: list[dict], out_path: str = "/tmp/subtitle_input.json"):
     """Whisper 세그먼트를 subtitle-splitter 에이전트용 JSON으로 덤프.
 

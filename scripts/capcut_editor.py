@@ -319,6 +319,42 @@ def build_segments(final_segs: list, orig_video: dict, orig_segment: dict,
     return segments, materials, timeline_frame
 
 
+def clone_video_segment(tmpl_seg: dict, tmpl_video: dict, source_start_us: int, dur_us: int,
+                        timeline_pos_us: int, materials: dict, draft_materials: dict | None = None) -> dict:
+    """기존 세그먼트를 새 구간으로 복제한다. 세그먼트마다 소재 7종을 새로 만들어 materials에 쌓고,
+    위치·크기(clip)·볼륨·렌더 순서는 템플릿 값을 그대로 쓴다 (make_segment는 이 값들을 초기화한다).
+
+    materials: build_segments가 돌려주는 것과 같은 키의 dict. 호출한 쪽이 draft에 이어붙인다.
+    draft_materials: draft["materials"]. 주면 템플릿의 크로마키·필터 같은 효과도 복제해 붙인다.
+    """
+    vid, spd, plc, cvs, snd, col, vcl, sid = (new_id() for _ in range(8))
+    for key, item in (("videos", make_video_material(vid, tmpl_video)), ("speeds", make_speed(spd)),
+                      ("placeholder_infos", make_placeholder(plc)), ("canvases", make_canvas(cvs)),
+                      ("sound_channel_mappings", make_sound_channel(snd)), ("material_colors", make_material_color(col)),
+                      ("vocal_separations", make_vocal_separation(vcl))):
+        materials.setdefault(key, []).append(item)
+    extra = [spd, plc, cvs, snd, col, vcl]
+    # 템플릿에 붙어 있던 다른 효과(크로마키·필터 등)도 복제해서 그대로 살린다.
+    # 실전: 얼굴캠 283개에 크로마키를 넣은 뒤 트랙을 다시 만들자 크로마키가 전부 사라졌다.
+    if draft_materials:
+        by_id = {m["id"]: (key, m) for key, lst in draft_materials.items() if isinstance(lst, list)
+                 for m in lst if isinstance(m, dict) and "id" in m}
+        kept = {"videos", "speeds", "placeholder_infos", "canvases", "sound_channel_mappings",
+                "material_colors", "vocal_separations"}
+        for ref in tmpl_seg.get("extra_material_refs", []):
+            key, mat = by_id.get(ref, (None, None))
+            if key and key not in kept:
+                clone = copy.deepcopy(mat)
+                clone["id"] = new_id()
+                materials.setdefault(key, []).append(clone)
+                extra.append(clone["id"])
+    seg = make_segment(sid, vid, extra, source_start_us, dur_us, timeline_pos_us, tmpl_seg)
+    for key in ("render_index", "track_render_index", "clip", "uniform_scale", "volume", "last_nonzero_volume"):
+        if key in tmpl_seg:
+            seg[key] = copy.deepcopy(tmpl_seg[key])
+    return seg
+
+
 # ────────────────────────────────────────────────
 # 편집 대상 트랙 선택
 # ────────────────────────────────────────────────
@@ -391,6 +427,14 @@ def write_4_files(project_dir: Path, timeline_uuid: str | None, updated_draft: d
         backup_project_json(project_dir, tag="capcut_editor")
     except Exception as e:
         print(f"  ⚠ 백업 건너뜀: {e}")
+
+    # CapCut은 메인(자석) 트랙을 segments 배열 순서대로 이어 붙인다. 시각만 고치고 배열 순서를
+    # 그대로 두면 CapCut을 여는 순간 옛 순서로 되돌아간다(실전: 앞 3분이 영상 맨 뒤로 밀림).
+    # 저장 직전에 항상 시간순으로 맞춰 둔다 — CapCut 자신도 이 순서로 저장한다.
+    for track in updated_draft.get("tracks", []):
+        segs = track.get("segments")
+        if segs:
+            segs.sort(key=lambda s: s.get("target_timerange", {}).get("start", 0))
 
     content = json.dumps(updated_draft, ensure_ascii=False, separators=(',', ':'))
 
