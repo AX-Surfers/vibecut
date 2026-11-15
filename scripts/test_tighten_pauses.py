@@ -11,7 +11,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 from speech import HOP, inner_pauses  # noqa: E402
-from tighten_pauses import learn_style, plan_pieces  # noqa: E402
+from tighten_pauses import align_overlay, learn_style, plan_pieces, subtract_ranges  # noqa: E402
 
 
 def mask_of(total: float, *spans: tuple[float, float]) -> np.ndarray:
@@ -46,6 +46,24 @@ def demo():
     m = mask_of(20, (1.06, 2.0), (2.4, 3.0), (5.06, 6.0), (6.2, 7.0), (9.06, 10.0))
     style = learn_style([(1.0, 3.04), (5.0, 7.04), (9.0, 10.04)], m)
     assert style == {"keep_before": 0.06, "keep_after": 0.04, "min_pause": 0.4}, style
+
+    # NG 구간 빼기: 여러 구간 / 클립 밖 구간 무시 / 13프레임 미만 조각은 버림
+    assert subtract_ranges(10, 20, [(12, 13), (15, 16)], fps=30) == [(300, 360), (390, 450), (480, 600)]
+    assert subtract_ranges(10, 20, [(0, 5), (25, 30)], fps=30) == [(300, 600)]
+    assert subtract_ranges(10, 20, [(10.2, 19.9)], fps=30) == []          # 앞 0.2초·뒤 0.1초 조각은 버림
+    assert subtract_ranges(10, 20, [(15, 16), (12, 13)], fps=30)[0] == (300, 360)  # 순서 무관
+
+    # 오버레이 정렬: 같은 자리면 그대로, 시작만 뒤처졌으면(본영상만 앞으로 늘림) 같이 당긴다
+    def seg(t0, dur, src, speed=1.0):
+        return {"target_timerange": {"start": t0, "duration": dur},
+                "source_timerange": {"start": src, "duration": int(dur * speed)}, "speed": speed}
+    mains = [seg(0, 2_000_000, 0, 1.3), seg(2_000_000, 3_000_000, 10_000_000, 1.3)]
+    assert align_overlay(seg(0, 2_000_000, 5_000_000, 1.3), mains) is mains[0]
+    late = seg(3_000_000, 2_000_000, 20_000_000, 1.3)        # 1초 늦게 시작, 끝은 같음
+    assert align_overlay(late, mains) is mains[1]
+    assert late["target_timerange"] == {"start": 2_000_000, "duration": 3_000_000}
+    assert late["source_timerange"] == {"start": 18_700_000, "duration": 3_900_000}   # 1초 × 1.3 당김
+    assert align_overlay(seg(500_000, 700_000, 0), mains) is None          # 끝이 안 맞으면 못 맞춤
 
     print("✓ tighten_pauses OK")
 

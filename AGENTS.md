@@ -25,6 +25,9 @@
 | 컷편집 구간 생성 | `scripts/make_segments.py` | Whisper 문장 경계 + NG 제거 |
 | 자막 (기존 프로젝트) | `scripts/subtitles_from_cuts.py` → `scripts/apply_subtitles.py` | 자막 경계 == 컷 경계, 다른 트랙 보존 |
 | CapCut JSON 적용 | `scripts/capcut_editor.py` | 4개 파일 동시 갱신, .locked 자동 삭제, 30fps 정렬 |
+| 완성본 무음·NG 컷 | `scripts/tighten_pauses.py` | 배속·부분 오버레이 유지, `--remove`로 NG 구간 컷 |
+| 편집된 타임라인 재전사 | `scripts/timeline_transcript.py` | 컷 뒤 NG 판단용, 클립별 단어@원본초 |
+| 클립 확대 | `scripts/zoom_clips.py` | 원본 시각 범위의 클립을 한 점 중심으로 확대 |
 
 ## Codex CLI 사용법
 
